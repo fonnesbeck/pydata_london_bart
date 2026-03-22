@@ -1,5 +1,7 @@
 # Flexible Statistical Modeling with Bayesian Additive Regression Trees
 
+** PyData London 2026 | 90-minute tutorial **
+
 Most machine learning methods give you a prediction but not a measure of how much to trust it. Bayesian Additive Regression Trees (BART) combine the flexibility of tree ensembles (e.g. random forests, boosting) with full uncertainty quantification—every prediction comes with a probability interval, not just a point estimate. This hands-on tutorial introduces BART through three applications: regression, classification, and survival analysis. Using `pymc-bart`, participants will learn to fit flexible models that automatically capture non-linear relationships while providing honest uncertainty estimates. We emphasize practical interpretation throughout: visualizing predictions with uncertainty bands, understanding variable importance, and interpreting model output.
 
 ---
@@ -35,14 +37,6 @@ This tutorial introduces BART through three applications, each demonstrating how
 **Classification:** For binary outcomes, BART produces predicted probabilities with uncertainty, not just class labels. We'll examine how this uncertainty propagates through decision-making and compare calibration against standard classifiers.
 
 **Survival analysis:** Time-to-event data is inherently uncertain, and BART's flexibility is particularly valuable when the hazard function has unknown shape. Participants will fit survival models and plot individualized survival curves with credible intervals—essential for communicating risk to stakeholders.
-
-Throughout, we emphasize practical interpretation: How do you read an HDI band? When should wide uncertainty change your decision? How do you diagnose whether your uncertainty estimates are trustworthy?
-
-**Target audience:** Data scientists and analysts looking to add useful statistical methods to their toolkit. 
-
-**Takeaways:** Participants will leave able to fit BART models for continuous, binary, and time-to-event outcomes; interpret predictions with full posterior uncertainty; use variable importance and partial dependence plots appropriately; and decide when BART's uncertainty quantification justifies its computational cost over simpler alternatives.
-
-**Materials:** GitHub repository with marimo notebooks, real-world datasets from sports, psychology, and other domains, environment files, and a one-page BART reference guide. Participants should clone the repository and verify their setup before the session.
 
 ---
 
