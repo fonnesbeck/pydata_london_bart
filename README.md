@@ -1,16 +1,14 @@
 # Flexible Statistical Modeling with Bayesian Additive Regression Trees
 
-** PyData London 2026 | 90-minute tutorial **
+### PyData London 2026 | 90-minute tutorial 
 
 Most machine learning methods give you a prediction but not a measure of how much to trust it. Bayesian Additive Regression Trees (BART) combine the flexibility of tree ensembles (e.g. random forests, boosting) with full uncertainty quantification—every prediction comes with a probability interval, not just a point estimate. This hands-on tutorial introduces BART through three applications: regression, classification, and survival analysis. Using `pymc-bart`, participants will learn to fit flexible models that automatically capture non-linear relationships while providing honest uncertainty estimates. We emphasize practical interpretation throughout: visualizing predictions with uncertainty bands, understanding variable importance, and interpreting model output.
 
----
 
 ## Prior Knowledge Expected
 
 Basic familiarity with Python and the basic scientific stack. Undergraduate-level statistics. Familiarity with survival analysis concepts (censoring, hazard functions) is helpful but not required. No prior experience with BART or tree-based methods is assumed.
 
----
 
 ## Outline
 
@@ -22,7 +20,6 @@ Basic familiarity with Python and the basic scientific stack. Undergraduate-leve
 - **BART for survival analysis (15 min, hands-on):** Time-to-event data and censoring; survival curves with credible intervals; individualized risk assessment
 - **Wrap-up (5 min):** When to use BART vs. alternatives; resources for further learning
 
----
 
 ## Description
 
@@ -38,7 +35,6 @@ This tutorial introduces BART through three applications, each demonstrating how
 
 **Survival analysis:** Time-to-event data is inherently uncertain, and BART's flexibility is particularly valuable when the hazard function has unknown shape. Participants will fit survival models and plot individualized survival curves with credible intervals—essential for communicating risk to stakeholders.
 
----
 
 ## Keywords
 
