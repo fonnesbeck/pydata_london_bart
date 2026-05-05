@@ -16,35 +16,6 @@ __generated_with = "0.21.1"
 app = marimo.App(width="medium")
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    # Bayesian Additive Regression Trees — from scratch
-
-    *PyData London 2026*
-
-    Chipman, George & McCulloch (2010), *BART: Bayesian Additive Regression Trees.*
-    Annals of Applied Statistics 4(1): 266–298. [arXiv:0806.3286](https://arxiv.org/abs/0806.3286)
-
-    ## What this notebook does
-
-    We build BART end-to-end: the prior, the marginal likelihood, the
-    Metropolis–Hastings moves, the Gibbs backfitting sweep, the classifier, and
-    the discrete-time survival wrapper — all in pure NumPy, no PyMC, no sklearn.
-
-    Three worked applications follow: regression on Friedman's test function,
-    probit classification, and discrete-time survival. A separate section
-    contrasts the paper's MH sampler with the Particle Gibbs sampler used by
-    modern BART implementations like `pymc-bart`.
-
-    ## Prerequisites
-
-    Comfortable with Bayesian regression, MCMC at the level of Metropolis–Hastings
-    and Gibbs, and decision trees. No prior BART exposure assumed.
-    """)
-    return
-
-
 @app.cell
 def _():
     import matplotlib.pyplot as plt
@@ -54,54 +25,6 @@ def _():
     rng = np.random.default_rng(20260423)
     plt.rcParams["figure.dpi"] = 110
     return chi2, norm, np, plt, rng, truncnorm
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 1 &nbsp; Why BART?
-
-    We model a continuous response as
-
-    $$
-        Y = f(x) + \varepsilon, \qquad \varepsilon \sim \mathcal N(0, \sigma^2),
-    $$
-
-    and approximate $f$ by a **sum of regression trees**
-
-    $$
-        f(x) \;\approx\; \sum_{j=1}^{m} g(x;\, T_j, M_j),
-    $$
-
-    where each $T_j$ is a binary tree structure and $M_j = \{\mu_{j\ell}\}$ the leaf
-    values. With $m$ in the hundreds, every tree only has to explain a small
-    slice of $f$ — that is what makes them *weak learners*. The Bayesian twist:
-    we put a prior on $(T_j, M_j, \sigma)$ and sample the posterior. Uncertainty
-    in $f$ then falls out of the MCMC draws — no bootstrap, no delta method.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 2 &nbsp; The regularisation prior
-
-    Three pieces, each pulling the fit toward "nothing interesting here":
-
-    - **Tree shape.** A node at depth $d$ is non-terminal with probability
-      $\alpha(1+d)^{-\beta}$. With the paper's defaults $(\alpha, \beta) = (0.95, 2)$,
-      most trees stay at 2–3 leaves.
-    - **Leaf values.** $\mu_{j\ell} \sim \mathcal N(0, \sigma_\mu^2)$ with
-      $\sigma_\mu = 0.5 / (k\sqrt{m})$ after rescaling $y$ to $[-0.5, 0.5]$.
-      So any one tree can only move the prediction a tiny amount.
-    - **Noise $\sigma$.** Inverse-$\chi^2$ with $(\nu, q) = (3, 0.9)$ calibrated
-      so that the prior is *dominated* by a rough OLS estimate of the residual sd
-      — we believe BART will do at least as well as OLS.
-
-    Play with $\alpha$ and $\beta$ below to see the tree-size prior shift.
-    """)
-    return
 
 
 @app.cell(hide_code=True)
@@ -156,23 +79,6 @@ def _(np, plt, tree_alpha, tree_beta):
     return
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 3 &nbsp; Representing a tree
-
-    A binary tree is a list of nodes. Each node is either **internal** (has a
-    split rule $x_j \le c$) or a **leaf** (has a value $\mu$). We store parent
-    and child indices in parallel arrays so that the cheap moves the sampler
-    needs — "find this node's sibling", "collapse this internal node into a
-    leaf" — are $O(1)$ index lookups rather than pointer chasing.
-
-    Root is always index $0$. `split_var[i] = -1` flags a leaf; otherwise it is
-    the column index to split on.
-    """)
-    return
-
-
 @app.class_definition
 # ─── Binary tree, stored as parallel arrays ──────────────────────────────
 #   split_var[i] = -1  iff node i is a leaf, else the column index to split on
@@ -212,9 +118,7 @@ class Tree:
         return [i for i in range(len(self.split_var)) if self.split_var[i] < 0]
 
     def internal_nodes(self):
-        return [
-            i for i in range(len(self.split_var)) if self.split_var[i] >= 0
-        ]
+        return [i for i in range(len(self.split_var)) if self.split_var[i] >= 0]
 
     def depth_of(self, i):
         d = 0
@@ -230,19 +134,6 @@ class Tree:
             if self.is_leaf(self.left[i]) and self.is_leaf(self.right[i]):
                 out.append(i)
         return out
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### Routing data through the tree
-
-    `assign_leaves` walks each row of `X` down the tree, recording which leaf
-    it lands in. `predict` then just looks up the leaf's $\mu$. This is the only
-    piece of code we call per-observation; keeping it tight matters because it
-    runs inside every MCMC sweep.
-    """)
-    return
 
 
 @app.cell
@@ -264,24 +155,12 @@ def _(np):
         descend(0, np.arange(n))
         return leaf_of
 
-
     def predict(tree, X):
         """Return (n,) tree predictions: leaf μ values at each row."""
         leaf_of = assign_leaves(tree, X)
         return np.asarray(tree.mu, dtype=float)[leaf_of]
 
     return assign_leaves, predict
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    #### Quick sanity check
-
-    Hand-build a tree with one split on $x_0$ at $0.5$ and two leaves
-    $\mu_L = -1,\ \mu_R = +2$, then route a toy $X$ through it.
-    """)
-    return
 
 
 @app.cell
@@ -301,39 +180,9 @@ def _(np, predict):
     return
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 4 &nbsp; The marginal likelihood of a tree
-
-    Before proposing a new tree structure we need to score the *current* one.
-    Writing $n_\ell$ for the rows in leaf $\ell$ and
-    $s_\ell = \sum_{i\in\ell} r_i$ for their residual sum, the leaf prior
-    $\mu \sim \mathcal N(0, \sigma_\mu^2)$ combines conjugately with the normal
-    data model to give a closed-form marginal:
-
-    $$
-        \log p(r \mid T, \sigma)
-        \;=\;
-        \sum_{\ell}
-        \Bigl[
-            \tfrac12 \log\!\tfrac{\sigma^2}{\sigma^2 + n_\ell \sigma_\mu^2}
-            \;+\;
-            \tfrac12 \cdot \tfrac{\sigma_\mu^2\, s_\ell^2}{\sigma^2(\sigma^2 + n_\ell \sigma_\mu^2)}
-        \Bigr]
-        \;+\; \text{const.}
-    $$
-
-    Because $\mu$ is integrated out, Metropolis–Hastings on tree structure is a
-    plain random-walk MH — no reversible-jump, no Jacobian.
-    """)
-    return
-
-
 @app.cell
 def _(assign_leaves, np):
     # ─── Marginal likelihood after integrating out leaf values ───────────────
-
 
     def log_marginal_leaf(n_l, s_l, sigma2, sigma_mu2):
         """Contribution of one leaf to log p(r | T, σ)."""
@@ -341,7 +190,6 @@ def _(assign_leaves, np):
         return 0.5 * np.log(sigma2 / denom) + 0.5 * sigma_mu2 * s_l**2 / (
             sigma2 * denom
         )
-
 
     def log_marginal_tree(tree, X, r, sigma2, sigma_mu2):
         """Log marginal likelihood of residuals r given tree structure."""
@@ -359,32 +207,9 @@ def _(assign_leaves, np):
     return (log_marginal_tree,)
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### The tree shape prior
-
-    CGM98 factorises the prior on a tree as
-
-    $$
-        p(T) \;=\; \prod_{\text{internal } i} p_{\text{split}}(d_i)
-                    \prod_{\text{leaf } \ell}\, (1 - p_{\text{split}}(d_\ell)),
-        \qquad
-        p_{\text{split}}(d) = \alpha(1+d)^{-\beta}.
-    $$
-
-    The uniform draw of split variable and cut value at each internal node
-    adds a constant $1/(p \cdot n_{\text{cuts}})$ factor per internal node;
-    because our MH proposals sample the same way, that factor cancels in the
-    acceptance ratio and we don't have to track it here.
-    """)
-    return
-
-
 @app.cell
 def _(np):
     # ─── Tree prior: α(1+d)^{-β} for splitting at depth d ────────────────────
-
 
     def log_prior_tree(tree, alpha, beta):
         """log p(T) under the CGM98 prior, up to constants from split rules."""
@@ -401,35 +226,6 @@ def _(np):
     return
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 5 &nbsp; Sampling trees with Metropolis–Hastings
-
-    Tree space is *discrete and unbounded*. CGM98 cycles through four local
-    moves — **grow** a leaf into an internal node, **prune** a twig back to a
-    leaf, **change** a split rule, **swap** two adjacent rules. We implement
-    grow + prune only: they already make the chain ergodic, and the other two
-    only help mixing on the margin.
-
-    At each sweep we draw $P(\text{grow}) = P(\text{prune}) = 0.5$ if both are
-    possible; on a stump only grow is legal.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### Tree-surgery helpers
-
-    Three small utilities the proposals need: enumerate allowable cut points in
-    a leaf, walk a subtree, and *compact* a tree after pruning (renumber
-    indices so the node arrays are contiguous).
-    """)
-    return
-
-
 @app.cell
 def _(np):
     def splittable_cuts(X_leaf, col):
@@ -438,7 +234,6 @@ def _(np):
         if vals.size < 2:
             return np.empty(0)
         return 0.5 * (vals[:-1] + vals[1:])
-
 
     def descendants(tree, node, leaves_only=False):
         """Indices of `node` and everything below it."""
@@ -452,7 +247,6 @@ def _(np):
         if leaves_only:
             return [i for i in out if tree.is_leaf(i)]
         return out
-
 
     def compact(tree):
         """Rebuild the tree dropping unreachable nodes, renumbering indices."""
@@ -478,44 +272,11 @@ def _(np):
             new.split_val.append(tree.split_val[old])
             new.mu.append(tree.mu[old])
             new.left.append(remap[tree.left[old]] if tree.left[old] >= 0 else -1)
-            new.right.append(
-                remap[tree.right[old]] if tree.right[old] >= 0 else -1
-            )
-            new.parent.append(
-                remap[tree.parent[old]] if tree.parent[old] >= 0 else -1
-            )
+            new.right.append(remap[tree.right[old]] if tree.right[old] >= 0 else -1)
+            new.parent.append(remap[tree.parent[old]] if tree.parent[old] >= 0 else -1)
         return new
 
     return compact, splittable_cuts
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### Grow: deriving the acceptance ratio
-
-    Pick a leaf $\ell$ uniformly at random (probability $1/b$ where $b$ is the
-    number of leaves), pick a split variable and cut value the same way the
-    prior does, and split. The prior and proposal both contain the same
-    $1/(p \cdot n_{\text{cuts}})$ factor for the uniform split rule draw, so
-    those cancel. What remains is the **shape ratio**
-
-    $$
-        \frac{p_{\text{split}}(d)\,(1-p_{\text{split}}(d+1))^2}
-             {1 - p_{\text{split}}(d)}
-    $$
-
-    (we turned a leaf at depth $d$ into an internal with two leaves at $d+1$)
-    and the **move-probability ratio**
-
-    $$
-        \frac{P_{\text{prune} \mid T'}\,/\,w'}{P_{\text{grow} \mid T}\,/\,b},
-    $$
-
-    where $w'$ counts *singly-internal* nodes of $T'$ (prune candidates).
-    Multiply by the marginal-likelihood ratio and we have $\log A$.
-    """)
-    return
 
 
 @app.cell
@@ -561,9 +322,7 @@ def _(log_marginal_tree, np, splittable_cuts):
         p_split_d = alpha * (1.0 + d) ** (-beta)
         p_split_d1 = alpha * (2.0 + d) ** (-beta)
         log_shape_ratio = (
-            np.log(p_split_d)
-            + 2.0 * np.log(1.0 - p_split_d1)
-            - np.log(1.0 - p_split_d)
+            np.log(p_split_d) + 2.0 * np.log(1.0 - p_split_d1) - np.log(1.0 - p_split_d)
         )
 
         b = len(leaves)
@@ -576,19 +335,6 @@ def _(log_marginal_tree, np, splittable_cuts):
         return t_new, log_accept
 
     return (grow_proposal,)
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### Prune: the reverse move
-
-    Pick a *singly-internal* node (both children are leaves) uniformly and
-    collapse it back to a leaf. The acceptance ratio is exactly the reciprocal
-    of the grow ratio — swap $T$ and $T'$, swap $b$ and $w$, flip the sign of
-    the shape-ratio log.
-    """)
-    return
 
 
 @app.cell
@@ -619,9 +365,7 @@ def _(compact, log_marginal_tree, np):
         p_split_d = alpha * (1.0 + d) ** (-beta)
         p_split_d1 = alpha * (2.0 + d) ** (-beta)
         log_shape_ratio = (
-            np.log(1.0 - p_split_d)
-            - np.log(p_split_d)
-            - 2.0 * np.log(1.0 - p_split_d1)
+            np.log(1.0 - p_split_d) - np.log(p_split_d) - 2.0 * np.log(1.0 - p_split_d1)
         )
 
         b_new = len(t_new.leaves())
@@ -633,31 +377,6 @@ def _(compact, log_marginal_tree, np):
         return t_new, log_accept
 
     return (prune_proposal,)
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 6 &nbsp; Gibbs updates for $\mu$ and $\sigma$
-
-    ### Drawing leaf values
-
-    With tree $T$ fixed, each leaf has $n_\ell$ residuals with sum $s_\ell$.
-    The normal–normal conjugacy gives
-
-    $$
-        \mu_\ell \mid r, T, \sigma
-        \;\sim\;
-        \mathcal N\!\Bigl(
-            \tfrac{s_\ell\,\sigma_\mu^2}{\sigma^2 + n_\ell \sigma_\mu^2},\;
-            \tfrac{\sigma^2\,\sigma_\mu^2}{\sigma^2 + n_\ell \sigma_\mu^2}
-        \Bigr).
-    $$
-
-    Shrinkage toward zero is strong when a leaf is small — the prior takes
-    over when the data has little to say.
-    """)
-    return
 
 
 @app.cell
@@ -680,28 +399,6 @@ def _(assign_leaves, np):
     return (draw_leaf_values,)
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### Updating $\sigma^2$ and the data-calibrated prior
-
-    With the ensemble $f(x) = \sum_j g(x; T_j, M_j)$ in hand, residuals
-    $e = y - f$ are exchangeable Gaussians so $\sigma^2$ updates through its
-    conjugate inverse-$\chi^2$:
-
-    $$
-        \sigma^2 \mid \text{everything}
-        \;\sim\;
-        \frac{\nu\lambda + \sum_i e_i^2}{\chi^2_{\nu + n}}.
-    $$
-
-    CGM98 calibrate $\lambda$ so the prior *quantile* at level $q$ equals a
-    rough OLS estimate $\hat\sigma$ — a stand-in for "BART will do at least as
-    well as a linear fit." Defaults $(\nu, q) = (3, 0.9)$.
-    """)
-    return
-
-
 @app.cell
 def _(chi2, np):
     def draw_sigma2(residuals, nu, lam, rng):
@@ -711,7 +408,6 @@ def _(chi2, np):
         scale = nu * lam + np.sum(residuals**2)
         chi = rng.chisquare(shape)
         return scale / chi
-
 
     def calibrate_sigma_prior(y, X, nu=3.0, q=0.9):
         """Compute λ so that P(σ < σ̂) = q under the prior σ² ~ νλ/χ²_ν.
@@ -733,30 +429,6 @@ def _(chi2, np):
     return calibrate_sigma_prior, draw_sigma2
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 7 &nbsp; The full MH–BART sampler
-
-    Chipman et al.'s *Bayesian backfitting* (Hastie & Tibshirani 2000) drops
-    out of the sum-of-trees structure. For each tree $T_j$, define the
-    *partial residual*
-
-    $$
-        R_j \;=\; y - \sum_{k \ne j} g(x; T_k, M_k).
-    $$
-
-    Conditional on the other trees and $\sigma$, updating $(T_j, M_j)$ is a
-    one-tree regression on $R_j$ — so each sweep calls grow/prune once per
-    tree, then refreshes leaf values, then draws $\sigma$.
-
-    One implementation choice worth pointing out: we keep a running
-    `tree_preds[j]` of each tree's contribution on the training rows, so
-    computing $R_j$ is $O(n)$ instead of $O(nm)$.
-    """)
-    return
-
-
 @app.cell
 def _(
     assign_leaves,
@@ -770,7 +442,6 @@ def _(
     prune_proposal,
 ):
     # ─── The BART sampler: Gibbs over trees, σ, and leaves ──────────────────
-
 
     def run_bart(
         X,
@@ -855,9 +526,7 @@ def _(
                         trees[j] = t_new
                         accept_stats["prune"][0] += 1
 
-                trees[j] = draw_leaf_values(
-                    trees[j], X, Rj, rng, sigma2, sigma_mu2
-                )
+                trees[j] = draw_leaf_values(trees[j], X, Rj, rng, sigma2, sigma_mu2)
                 tree_preds[j] = predict(trees[j], X)
 
             f_hat = tree_preds.sum(axis=0)
@@ -903,18 +572,6 @@ def _(
     return (run_bart,)
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### Out-of-sample prediction
-
-    We stored every post-burn-in tree ensemble as a snapshot. To score a new
-    `X_new`, just push it through each snapshot and average — giving us the
-    same posterior uncertainty at test points as on the training set.
-    """)
-    return
-
-
 @app.cell
 def _(np, predict):
     def predict_at(fit, X_new):
@@ -938,11 +595,9 @@ def _(np, predict):
 def _(assign_leaves, splittable_cuts):
     # ─── PG-BART helpers ─────────────────────────────────────────────────────
 
-
     def _frontier(tree, depth):
         """Leaves of `tree` currently at this depth — the SMC advance frontier."""
         return [lf for lf in tree.leaves() if tree.depth_of(lf) == depth]
-
 
     def _split_in_place(tree, leaf, var, cut):
         """Turn `leaf` into an internal node with two fresh leaf children."""
@@ -958,7 +613,6 @@ def _(assign_leaves, splittable_cuts):
         tree.right += [-1, -1]
         tree.parent += [leaf, leaf]
         tree.mu += [0.0, 0.0]
-
 
     def grow_particle(tree, X, depth, rng, alpha, beta):
         """Advance one particle by one SMC step.
@@ -1008,9 +662,7 @@ def _(grow_particle, log_marginal_tree, np):
         The final draw is over **all** particles (including the reference) — so
         if no new proposal beats the current tree the sampler simply stays put.
         """
-        particles = [
-            reference_tree.copy() if reference_tree is not None else Tree()
-        ]
+        particles = [reference_tree.copy() if reference_tree is not None else Tree()]
         for _ in range(n_particles - 1):
             particles.append(Tree())
 
@@ -1034,9 +686,7 @@ def _(grow_particle, log_marginal_tree, np):
             u = (rng.random() + np.arange(n_particles - 1)) / (n_particles - 1)
             idx = np.clip(np.searchsorted(csum, u), 0, n_particles - 1)
             particles = [particles[0]] + [particles[int(j)].copy() for j in idx]
-            log_w = [
-                log_marginal_tree(p, X, r, sigma2, sigma_mu2) for p in particles
-            ]
+            log_w = [log_marginal_tree(p, X, r, sigma2, sigma_mu2) for p in particles]
 
         # Draw the returned tree from ALL particles (including the reference) —
         # excluding the reference would break detailed balance: if every new
@@ -1148,9 +798,7 @@ def _(
                     alpha=alpha,
                     beta=beta,
                 )
-                trees[j] = draw_leaf_values(
-                    trees[j], X, Rj, rng, sigma2, sigma_mu2
-                )
+                trees[j] = draw_leaf_values(trees[j], X, Rj, rng, sigma2, sigma_mu2)
                 tree_preds[j] = predict(trees[j], X)
 
             f_hat = tree_preds.sum(axis=0)
@@ -1196,12 +844,13 @@ def _(
 
 
 @app.cell
-def _(X_train, np, run_bart, run_bart_pg, y_train):
-    # Cheap comparison: small m + n_iter so the cell stays interactive.
+def _(X_fried, np, run_bart, run_bart_pg, y_fried):
+    # Cheap comparison on Friedman (known σ=1) so the two samplers
+    # can be benchmarked against a shared reference line.
     _rng_cmp = np.random.default_rng(20260423)
     fit_mh = run_bart(
-        X_train,
-        y_train,
+        X_fried,
+        y_fried,
         m=50,
         n_iter=500,
         burn_in=200,
@@ -1214,8 +863,8 @@ def _(X_train, np, run_bart, run_bart_pg, y_train):
         verbose=False,
     )
     fit_pg = run_bart_pg(
-        X_train,
-        y_train,
+        X_fried,
+        y_fried,
         m=50,
         n_iter=500,
         burn_in=200,
@@ -1248,15 +897,10 @@ def _(fit_mh, fit_pg, np, plt):
             out[i] = float(ess(x[:k]))
         return ks, out
 
-
     _fig, (_a, _b) = plt.subplots(1, 2, figsize=(11, 3.8))
 
-    _a.plot(
-        fit_mh["sigma_draws"], lw=0.6, alpha=0.9, label="MH-BART", color="#4c72b0"
-    )
-    _a.plot(
-        fit_pg["sigma_draws"], lw=0.6, alpha=0.9, label="PG-BART", color="#c44e52"
-    )
+    _a.plot(fit_mh["sigma_draws"], lw=0.6, alpha=0.9, label="MH-BART", color="#4c72b0")
+    _a.plot(fit_pg["sigma_draws"], lw=0.6, alpha=0.9, label="PG-BART", color="#c44e52")
     _a.axhline(1.0, lw=1.0, ls="--", color="#333", label=r"true $\sigma = 1$")
     _a.set_xlabel("kept iteration")
     _a.set_ylabel(r"$\sigma$ draw")
@@ -1304,18 +948,197 @@ def _(np, rng):
 
     # Paper §5.2.1 defaults: n=100, p=10.
     n_train, n_feat = 100, 10
-    X_train = rng.uniform(size=(n_train, n_feat))
-    y_train = friedman(X_train, noise=1.0, rng=rng)
-    X_test = rng.uniform(size=(200, n_feat))
-    y_test_true = friedman(X_test, noise=0.0)
-    y_train.shape, X_train.shape
-    return X_test, X_train, friedman, y_test_true, y_train
+    X_fried = rng.uniform(size=(n_train, n_feat))
+    y_fried = friedman(X_fried, noise=1.0, rng=rng)
+    X_fried_test = rng.uniform(size=(200, n_feat))
+    y_fried_test_true = friedman(X_fried_test, noise=0.0)
+    y_fried.shape, X_fried.shape
+    return X_fried, X_fried_test, friedman, y_fried, y_fried_test_true
+
+
+@app.cell
+def _(X_fried, np, run_bart, y_fried):
+    # Preamble: fit BART on the Friedman DGP where f(x) and σ are both
+    # known. Small m and few iterations — this is a calibration sanity check,
+    # not the main demonstration. The "real data" fit lives below.
+    fit_fried = run_bart(
+        X_fried,
+        y_fried,
+        m=50,
+        n_iter=500,
+        burn_in=200,
+        thin=1,
+        alpha=0.95,
+        beta=2.0,
+        k=2.0,
+        nu=3.0,
+        q=0.9,
+        rng=np.random.default_rng(20260423),
+        verbose=False,
+    )
+    return (fit_fried,)
+
+
+@app.cell(hide_code=True)
+def _(
+    X_fried,
+    X_fried_test,
+    fit_fried,
+    friedman,
+    np,
+    plt,
+    predict_at,
+    y_fried_test_true,
+):
+    # 90% credible-interval coverage on the Friedman DGP, in- and out-of-sample,
+    # plotted against the known true f(x). This is the calibration picture that
+    # lets us trust BART's uncertainty quantification before turning it on data
+    # whose answer we don't know.
+    _f_true_in = friedman(X_fried, noise=0.0)
+    _f_mean_in = fit_fried["f_mean"]
+    _f_lo_in = fit_fried["f_lo"]
+    _f_hi_in = fit_fried["f_hi"]
+    _cov_in = ((_f_lo_in <= _f_true_in) & (_f_true_in <= _f_hi_in)).mean()
+
+    _f_draws_out = predict_at(fit_fried, X_fried_test)
+    _f_mean_out = _f_draws_out.mean(axis=0)
+    _f_lo_out = np.quantile(_f_draws_out, 0.05, axis=0)
+    _f_hi_out = np.quantile(_f_draws_out, 0.95, axis=0)
+    _cov_out = (
+        (_f_lo_out <= y_fried_test_true) & (y_fried_test_true <= _f_hi_out)
+    ).mean()
+
+    _fig, (_a, _b) = plt.subplots(1, 2, figsize=(11, 4.2))
+    for _ax, _xt, _m, _lo, _hi, _cov, _tag in [
+        (_a, _f_true_in, _f_mean_in, _f_lo_in, _f_hi_in, _cov_in, "in-sample"),
+        (
+            _b,
+            y_fried_test_true,
+            _f_mean_out,
+            _f_lo_out,
+            _f_hi_out,
+            _cov_out,
+            "out-of-sample",
+        ),
+    ]:
+        _order = np.argsort(_xt)
+        _ax.errorbar(
+            _xt[_order],
+            _m[_order],
+            yerr=[(_m - _lo)[_order], (_hi - _m)[_order]],
+            fmt="o",
+            ms=3,
+            ecolor="#4c72b0",
+            color="#333",
+            alpha=0.55,
+            elinewidth=0.7,
+        )
+        _lim = (_xt.min() - 1, _xt.max() + 1)
+        _ax.plot(_lim, _lim, "--", color="C3", lw=1)
+        _ax.set_xlim(_lim)
+        _ax.set_ylim(_lim)
+        _ax.set_xlabel(r"true $f(x)$")
+        _ax.set_ylabel(r"posterior mean $\hat f(x)$ with 90% CI")
+        _ax.set_title(f"{_tag} — 90% coverage: {_cov:.0%}")
+
+    _fig.suptitle(
+        "Friedman sanity check: BART is calibrated when the truth is known", y=1.02
+    )
+    _fig.tight_layout()
+    _fig
+    return
+
+
+@app.cell
+def _(Path, os, pl):
+    # 2024 British Grand Prix lap data (FastF1 / F1 live timing API).
+    # One row per clean racing lap for the 19 classified drivers. Silverstone
+    # 2024 had a wet phase, so INTERMEDIATE tyres appear alongside the dry
+    # SOFT/MEDIUM/HARD compounds — rich nonlinearity for BART to learn.
+    # Source: https://github.com/theOehrly/Fast-F1 (cached under .cache/fastf1).
+    # Pull script: scripts/pull_f1_laps.py
+    def load_f1_laps():
+        override = os.environ.get("F1_LAPS_CSV")
+        candidates = []
+        if override:
+            candidates.append(Path(override))
+        candidates.extend(
+            [
+                Path.cwd() / "data" / "f1_laps.csv",
+                Path.home()
+                / "repos"
+                / "pydata_london_bart"
+                / "data"
+                / "f1_laps.csv",
+            ]
+        )
+        for p in candidates:
+            if p.exists():
+                return pl.read_csv(p)
+        raise FileNotFoundError(
+            "f1_laps.csv not found. Set F1_LAPS_CSV env var or place the file "
+            "at ./data/f1_laps.csv. Regenerate with scripts/pull_f1_laps.py "
+            "(requires fastf1 + an internet connection on first run)."
+        )
+
+
+    f1_df = load_f1_laps()
+    f1_df.shape
+    return (f1_df,)
+
+
+@app.cell
+def _(f1_df, np):
+    # Feature set: three in-race progress variables (tyre_life, lap_number, stint),
+    # four weather variables (air_temp, track_temp, humidity, wind_speed), and
+    # three compound indicators (MEDIUM is the baseline — it was the most-run
+    # dry compound at Silverstone 2024). Target: lap time in seconds.
+    _num_cols = [
+        "tyre_life",
+        "lap_number",
+        "stint",
+        "air_temp",
+        "track_temp",
+        "humidity",
+        "wind_speed",
+    ]
+    # MEDIUM is the baseline; the three indicator columns capture the rest.
+    _compounds_in_data = ["SOFT", "HARD", "INTERMEDIATE"]
+    f1_feature_names = list(_num_cols) + [
+        f"compound_{c}" for c in _compounds_in_data
+    ]
+
+    _X_num = f1_df.select(_num_cols).to_numpy().astype(float)
+    _X_cmp = np.column_stack(
+        [
+            (f1_df["compound"].to_numpy() == c).astype(float)
+            for c in _compounds_in_data
+        ]
+    )
+    _X = np.concatenate([_X_num, _X_cmp], axis=1)
+    _y = f1_df["lap_time_s"].to_numpy().astype(float)
+
+    _n_train = 500
+    _n_test = 200
+    _rng_f1 = np.random.default_rng(20260423)
+    _perm = _rng_f1.permutation(_X.shape[0])
+    X_train = _X[_perm[:_n_train]]
+    y_train = _y[_perm[:_n_train]]
+    X_test = _X[_perm[_n_train : _n_train + _n_test]]
+    y_test = _y[_perm[_n_train : _n_train + _n_test]]
+
+    (
+        f"n_train={X_train.shape[0]}, n_test={X_test.shape[0]}, "
+        f"p={X_train.shape[1]}, "
+        f"train lap time mean={y_train.mean():.2f}s (sd={y_train.std():.2f}s)"
+    )
+    return X_test, X_train, f1_feature_names, y_test, y_train
 
 
 @app.cell
 def _(X_train, np, run_bart, y_train):
-    # Fit BART with paper defaults: m=200 trees, (ν,q,k) = (3, 0.9, 2).
-    # 5000 kept draws after 1000 burn-in (matches Fig. 3 of the paper).
+    # Main §7 fit: paper defaults (m=200 trees, (ν,q,k) = (3, 0.9, 2))
+    # on the wine-quality training set. 2000 kept draws after 1000 burn-in.
     fit = run_bart(
         X_train,
         y_train,
@@ -1335,99 +1158,73 @@ def _(X_train, np, run_bart, y_train):
 
 
 @app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### In-sample fit, $\sigma$ mixing, and the $\sigma$ posterior
-
-    Three diagnostics from one run:
-
-    - Posterior mean of $f$ vs. the known truth with a 90% credible band.
-      Because this is the Friedman signal we *know* the truth — so this is the
-      cleanest picture of BART's recovery.
-    - $\sigma$ trace — should hover around the truth of 1 after burn-in.
-    - $\sigma$ posterior density — quantifies how well MCMC pins down the
-      noise scale.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(X_train, fit, friedman, np, plt):
-    # In-sample fit: posterior mean of f(x) with 90% CI against the known
-    # underlying signal.  Unlike out-of-sample, here we *know* f_true, so this
-    # is the cleanest picture of how well BART has recovered the regression
-    # function at the observed x's.
-    _f_true_train = friedman(X_train, noise=0.0)
+def _(X_train, fit, np, plt, predict_at, y_train):
+    # In-sample fit on F1 lap times. Unlike the Friedman preamble we no longer
+    # have a true f(x) — we compare the posterior predictive (f + σ·N(0,1))
+    # against observed lap times in seconds, and look at the σ posterior on
+    # its own (no reference line). σ is the residual driver/noise scale after
+    # BART absorbs compound + weather + in-race progress signals.
     _f_mean = fit["f_mean"]
-    _f_lo = fit["f_lo"]
-    _f_hi = fit["f_hi"]
+    _sigma_in = fit["sigma_draws"]
 
-    _in_cov = ((_f_lo <= _f_true_train) & (_f_true_train <= _f_hi)).mean()
+    # Posterior predictive draws for in-sample coverage: add σ to the f draws.
+    _f_draws_in = predict_at(fit, X_train)
+    _rng_pp = np.random.default_rng(20260423)
+    _pp_draws_in = (
+        _f_draws_in
+        + _rng_pp.standard_normal(_f_draws_in.shape) * _sigma_in[:, None]
+    )
+    _pp_lo_in = np.quantile(_pp_draws_in, 0.05, axis=0)
+    _pp_hi_in = np.quantile(_pp_draws_in, 0.95, axis=0)
+    _pp_cov_in = ((_pp_lo_in <= y_train) & (y_train <= _pp_hi_in)).mean()
 
     _fig, (_ax1, _ax2, _ax3) = plt.subplots(1, 3, figsize=(13, 4))
 
-    # (a) In-sample posterior vs truth
-    _order = np.argsort(_f_true_train)
+    # (a) Observed y vs posterior mean + 90% posterior predictive interval.
+    _order = np.argsort(y_train)
     _ax1.errorbar(
-        _f_true_train[_order],
+        y_train[_order],
         _f_mean[_order],
-        yerr=[(_f_mean - _f_lo)[_order], (_f_hi - _f_mean)[_order]],
+        yerr=[(_f_mean - _pp_lo_in)[_order], (_pp_hi_in - _f_mean)[_order]],
         fmt="o",
         ms=3,
         ecolor="#4c72b0",
         color="#333",
-        alpha=0.6,
-        elinewidth=0.8,
+        alpha=0.55,
+        elinewidth=0.7,
     )
-    _lim = (_f_true_train.min() - 1, _f_true_train.max() + 1)
+    _lim = (y_train.min() - 1, y_train.max() + 1)
     _ax1.plot(_lim, _lim, "--", color="C3", lw=1)
     _ax1.set_xlim(_lim)
     _ax1.set_ylim(_lim)
-    _ax1.set_xlabel(r"true $f(x)$")
-    _ax1.set_ylabel(r"posterior mean $\hat f(x)$ with 90% CI")
-    _ax1.set_title(f"In-sample fit — 90% coverage: {_in_cov:.0%}")
+    _ax1.set_xlabel("observed lap time (s)")
+    _ax1.set_ylabel(r"posterior mean $\hat f(x)$ with 90% PI")
+    _ax1.set_title(f"In-sample fit — predictive coverage: {_pp_cov_in:.0%}")
 
     # (b) σ trace
-    _sigma = fit["sigma_draws"]
-    _ax2.plot(_sigma, ",", color="#333", alpha=0.4)
-    _ax2.axhline(1.0, color="C3", lw=1.5, label=r"true $\sigma = 1$")
+    _ax2.plot(_sigma_in, ",", color="#333", alpha=0.4)
     _ax2.set_xlabel("MCMC iteration (post burn-in)")
-    _ax2.set_ylabel(r"$\sigma$ draw")
+    _ax2.set_ylabel(r"$\sigma$ draw (s)")
     _ax2.set_title(r"$\sigma$ trace — checks mixing")
-    _ax2.legend()
 
     # (c) σ posterior density
     _ax3.hist(
-        _sigma,
+        _sigma_in,
         bins=40,
         density=True,
         color="#4c72b0",
         edgecolor="white",
         alpha=0.85,
     )
-    _ax3.axvline(1.0, color="C3", lw=1.5, label=r"true $\sigma = 1$")
-    _ax3.set_xlabel(r"$\sigma$")
+    _ax3.set_xlabel(r"$\sigma$ (s)")
     _ax3.set_ylabel("posterior density")
     _ax3.set_title(
-        rf"$\sigma$ posterior: {_sigma.mean():.2f} [{np.quantile(_sigma, 0.05):.2f}, "
-        rf"{np.quantile(_sigma, 0.95):.2f}]"
+        rf"$\sigma$ posterior: {_sigma_in.mean():.2f}s "
+        rf"[{np.quantile(_sigma_in, 0.05):.2f}, {np.quantile(_sigma_in, 0.95):.2f}]"
     )
-    _ax3.legend()
 
     _fig.tight_layout()
     _fig
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### Out-of-sample coverage
-
-    Apply each stored ensemble to `X_test` and average. We know the noiseless
-    $f(x_{\text{test}})$ for this simulation, so we can check calibration: the
-    nominal 90% bands should cover roughly 90% of truths.
-    """)
     return
 
 
@@ -1435,136 +1232,121 @@ def _(mo):
 def _(X_test, fit, np, predict_at):
     f_test_draws = predict_at(fit, X_test)
     f_test_mean = f_test_draws.mean(axis=0)
-    f_test_lo = np.quantile(f_test_draws, 0.05, axis=0)
-    f_test_hi = np.quantile(f_test_draws, 0.95, axis=0)
-    return f_test_hi, f_test_lo, f_test_mean
+
+    # Posterior predictive intervals = f draws + σ · N(0, 1) per posterior draw.
+    _sigma_test = fit["sigma_draws"]
+    _rng_oos = np.random.default_rng(20260423)
+    pp_test_draws = (
+        f_test_draws
+        + _rng_oos.standard_normal(f_test_draws.shape) * _sigma_test[:, None]
+    )
+    pp_test_lo = np.quantile(pp_test_draws, 0.05, axis=0)
+    pp_test_hi = np.quantile(pp_test_draws, 0.95, axis=0)
+    return f_test_mean, pp_test_hi, pp_test_lo
 
 
 @app.cell(hide_code=True)
-def _(f_test_hi, f_test_lo, f_test_mean, np, plt, y_test_true):
-    _covered = (f_test_lo <= y_test_true) & (y_test_true <= f_test_hi)
+def _(f_test_mean, np, plt, pp_test_hi, pp_test_lo, y_test):
+    _covered = (pp_test_lo <= y_test) & (y_test <= pp_test_hi)
 
     _fig, _ax = plt.subplots(figsize=(6, 5))
-    _order = np.argsort(y_test_true)
+    _order = np.argsort(y_test)
     _ax.errorbar(
-        y_test_true[_order],
+        y_test[_order],
         f_test_mean[_order],
         yerr=[
-            (f_test_mean - f_test_lo)[_order],
-            (f_test_hi - f_test_mean)[_order],
+            (f_test_mean - pp_test_lo)[_order],
+            (pp_test_hi - f_test_mean)[_order],
         ],
         fmt="o",
-        ms=3,
+        ms=4,
         ecolor="#4c72b0",
         color="#333",
         alpha=0.6,
         elinewidth=0.8,
     )
     _lim = (
-        min(y_test_true.min(), f_test_mean.min()) - 1,
-        max(y_test_true.max(), f_test_mean.max()) + 1,
+        min(y_test.min(), f_test_mean.min()) - 1,
+        max(y_test.max(), f_test_mean.max()) + 1,
     )
     _ax.plot(_lim, _lim, "--", color="C3", lw=1)
     _ax.set_xlim(_lim)
     _ax.set_ylim(_lim)
-    _ax.set_xlabel(r"true $f(x)$ (out-of-sample)")
-    _ax.set_ylabel(r"posterior mean $\hat f(x)$ with 90% interval")
-    _ax.set_title(f"Coverage of nominal 90% interval: {_covered.mean():.0%}")
+    _ax.set_xlabel("observed lap time (s) — held-out laps")
+    _ax.set_ylabel(
+        r"posterior mean $\hat f(x)$ with 90% posterior-predictive interval"
+    )
+    _ax.set_title(f"Out-of-sample predictive coverage: {_covered.mean():.0%}")
     _fig.tight_layout()
     _fig
     return
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### Which variables are BART using?
-
-    CGM98 Eq. 20 defines the *inclusion frequency* $v_i$ as the average (over
-    MCMC draws) fraction of tree split rules that use variable $i$. A simple,
-    robust signal: variables with little effect rarely get split on.
-    """)
-    return
-
-
 @app.cell
-def _(X_train, fit, np):
+def _(f1_feature_names, fit, np):
     # Average fraction of split rules using each variable, per CGM Eq. 20:
     # v_i = (1/K) Σ_k z_{ik}, where z_{ik} is the fraction of splits using var i.
     _total_per_iter = fit["splits"].sum(axis=1, keepdims=True)
     _total_per_iter = np.where(_total_per_iter == 0, 1, _total_per_iter)
     inclusion = (fit["splits"] / _total_per_iter).mean(axis=0)
-    inclusion_labels = [f"x{i + 1}" for i in range(X_train.shape[1])]
+    inclusion_labels = list(f1_feature_names)
     return inclusion, inclusion_labels
 
 
 @app.cell(hide_code=True)
 def _(inclusion, inclusion_labels, np, plt):
     _order = np.argsort(-inclusion)
-    _colors = [
-        "#4c72b0" if int(inclusion_labels[i][1:]) <= 5 else "#bbbbbb"
-        for i in _order
-    ]
-    _fig, _ax = plt.subplots(figsize=(7, 3.5))
+    _fig, _ax = plt.subplots(figsize=(8, 3.8))
     _ax.bar(
-        [f"${inclusion_labels[i]}$" for i in _order],
+        [inclusion_labels[i] for i in _order],
         inclusion[_order],
-        color=_colors,
+        color="#4c72b0",
         edgecolor="white",
     )
     _ax.set_ylabel("relative inclusion frequency")
-    _ax.set_title("Variable importance — blue = truly relevant")
+    _ax.set_title("Variable importance — 2024 British GP lap times")
+    _ax.tick_params(axis="x", labelrotation=45)
+    for _lbl in _ax.get_xticklabels():
+        _lbl.set_ha("right")
     _fig.tight_layout()
     _fig
     return
 
 
 @app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### Partial dependence plots
-
-    Eq. 19 of the paper: sweep one coordinate across its quantile grid while
-    fixing all others at observed values, and average predictions. The five
-    signal variables show clearly bent/nonlinear dependences; the other five
-    are flat with a posterior band tight around zero.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(X_train, fit, np, plt, predict_at):
+def _(X_train, f1_feature_names, fit, np, plt, predict_at):
     # Partial dependence (Eq. 19): f_s(x_s) = (1/n) Σ_i f(x_s, x_{i,c})
     # For each variable, sweep x_s across its quantile grid, fix all other
     # columns to training values, evaluate every posterior draw, aggregate.
     def partial_dependence(fit, X, var_idx, grid_size=20):
         xs = np.quantile(X[:, var_idx], np.linspace(0.05, 0.95, grid_size))
-        n = X.shape[0]
         pdp_draws = np.zeros((len(fit["tree_snapshots"]), grid_size))
         for k, x_s in enumerate(xs):
             X_rep = X.copy()
             X_rep[:, var_idx] = x_s
-            # average across observations for each draw
             draws = predict_at(fit, X_rep)  # (n_draws, n)
             pdp_draws[:, k] = draws.mean(axis=1)
         return xs, pdp_draws
 
 
-    _fig, _axes = plt.subplots(2, 5, figsize=(12, 5), sharey=True)
-    for v in range(X_train.shape[1]):
+    _n_feat = X_train.shape[1]
+    _ncols = 4
+    _nrows = (_n_feat + _ncols - 1) // _ncols
+    _fig, _axes = plt.subplots(
+        _nrows, _ncols, figsize=(3 * _ncols, 2.3 * _nrows), sharey=True
+    )
+    for v in range(_n_feat):
         ax = _axes.flat[v]
         xs, pdp_draws = partial_dependence(fit, X_train, v, grid_size=15)
         m_ = pdp_draws.mean(axis=0)
         lo, hi = np.quantile(pdp_draws, [0.05, 0.95], axis=0)
-        color = "#4c72b0" if v < 5 else "#888"
-        ax.fill_between(xs, lo, hi, alpha=0.25, color=color)
-        ax.plot(xs, m_, color=color)
-        ax.set_title(f"$x_{{{v + 1}}}$", fontsize=9)
+        ax.fill_between(xs, lo, hi, alpha=0.25, color="#4c72b0")
+        ax.plot(xs, m_, color="#4c72b0")
+        ax.set_title(f1_feature_names[v], fontsize=9)
         ax.set_xticks([])
-    _fig.suptitle(
-        "Partial dependence — only $x_1, \\ldots, x_5$ carry signal",
-        y=1.02,
-    )
+    for v in range(_n_feat, _axes.size):
+        _axes.flat[v].axis("off")
+    _fig.suptitle("Partial dependence of lap time (s) on each feature", y=1.01)
     _fig.tight_layout()
     _fig
     return
@@ -1578,30 +1360,14 @@ def _(np, truncnorm):
         # Positive cases: truncate left at 0
         pos = y_bin == 1
         a_pos = (0.0 - G[pos]) / 1.0
-        z[pos] = truncnorm.rvs(
-            a_pos, np.inf, loc=G[pos], scale=1.0, random_state=rng
-        )
+        z[pos] = truncnorm.rvs(a_pos, np.inf, loc=G[pos], scale=1.0, random_state=rng)
         # Negative cases: truncate right at 0
         neg = ~pos
         b_neg = (0.0 - G[neg]) / 1.0
-        z[neg] = truncnorm.rvs(
-            -np.inf, b_neg, loc=G[neg], scale=1.0, random_state=rng
-        )
+        z[neg] = truncnorm.rvs(-np.inf, b_neg, loc=G[neg], scale=1.0, random_state=rng)
         return z
 
     return (sample_latent_z,)
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### What changes in the sampler
-
-    With $\sigma$ fixed and no $y$-rescaling, the backfitting loop is nearly
-    identical to `run_bart`. We substitute $Z$ for the response and refresh
-    $Z$ at the top of every sweep from the truncated-normal conditional.
-    """)
-    return
 
 
 @app.cell
@@ -1651,9 +1417,7 @@ def _(
         # Initialize Z from prior centered at 0
         z = sample_latent_z(y_bin, np.zeros(n), rng)
 
-        for it in mo.status.progress_bar(
-            range(n_iter), title="BART probit sampling"
-        ):
+        for it in mo.status.progress_bar(range(n_iter), title="BART probit sampling"):
             G_curr = tree_preds.sum(axis=0)
 
             # 1) draw latent Z | G, y
@@ -1691,9 +1455,7 @@ def _(
                     if t_new is not None and np.log(rng.random()) < logA:
                         trees[j] = t_new
 
-                trees[j] = draw_leaf_values(
-                    trees[j], X, Rj, rng, sigma2, sigma_mu2
-                )
+                trees[j] = draw_leaf_values(trees[j], X, Rj, rng, sigma2, sigma_mu2)
                 tree_preds[j] = predict(trees[j], X)
 
             if it >= burn_in and ((it - burn_in) % thin == 0):
@@ -1724,7 +1486,6 @@ def _(
             "tree_snapshots": tree_snapshots,
         }
 
-
     def predict_probit_at(fit, X_new):
         """Return (n_draws, n_new) array of p(x) draws at X_new."""
         snaps = fit["tree_snapshots"]
@@ -1748,7 +1509,6 @@ def _(np, rng):
         prob_true = 1 / (1 + np.exp(-logit))
         y = rng.binomial(1, prob_true)
         return X, y, prob_true
-
 
     X_cls, y_cls, prob_true = simulate_binary(500, 20, rng)
     X_cls_test, y_cls_test, prob_test_true = simulate_binary(300, 20, rng)
@@ -1857,7 +1617,6 @@ def _(np, rng):
             np.column_stack([rows_t, rows_x1, rows_x2]).astype(float),
         )
 
-
     surv_y, surv_X = simulate_survival(150, rng, max_time=12)
     f"{surv_X.shape[0]} person-time rows, {surv_y.sum()} events"
     return surv_X, surv_y
@@ -1906,9 +1665,7 @@ def _(S_high, S_low, np, plt, times):
 
     _fig, _ax = plt.subplots(figsize=(7, 4))
     _ax.step(times, _m_low, where="post", color="#4c72b0", label=r"$x_1 = -0.8$")
-    _ax.fill_between(
-        times, _lo_low, _hi_low, step="post", color="#4c72b0", alpha=0.25
-    )
+    _ax.fill_between(times, _lo_low, _hi_low, step="post", color="#4c72b0", alpha=0.25)
     _ax.step(times, _m_high, where="post", color="#c44e52", label=r"$x_1 = +0.8$")
     _ax.fill_between(
         times, _lo_high, _hi_high, step="post", color="#c44e52", alpha=0.25
@@ -1925,246 +1682,171 @@ def _(S_high, S_low, np, plt, times):
 
 @app.cell
 def _():
+    import pymc as pm
+    import pymc_bart as pmb
+    import arviz as az
+
+    return az, pm, pmb
+
+
+@app.cell
+def _(X_fried, pm, pmb, y_fried):
+    with pm.Model():
+        # m=200 matches the bespoke Friedman preamble above so this is a like-for-like
+        # comparison on the same synthetic data with known σ = 1.
+        μ_bart = pmb.BART("μ", X=X_fried, Y=y_fried, m=200)
+        σ_reg = pm.HalfNormal("σ", 1.0)
+        pm.Normal("y", mu=μ_bart, sigma=σ_reg, observed=y_fried)
+        idata_fried = pm.sample(
+            draws=500,
+            tune=500,
+            chains=2,
+            cores=1,
+            random_seed=20260423,
+            progressbar=False,
+        )
+    return (idata_fried,)
+
+
+@app.cell(hide_code=True)
+def _(az, fit_fried, idata_fried, np, plt):
+    _fig, _ax = plt.subplots(figsize=(6.5, 3.5))
+    _sigma_bespoke = fit_fried["sigma_draws"]
+    _sigma_pymc = np.asarray(az.extract(idata_fried, var_names="σ").values).ravel()
+    _bins = np.linspace(
+        min(_sigma_bespoke.min(), _sigma_pymc.min()) * 0.9,
+        max(_sigma_bespoke.max(), _sigma_pymc.max()) * 1.05,
+        40,
+    )
+    _ax.hist(
+        _sigma_bespoke,
+        bins=_bins,
+        alpha=0.55,
+        density=True,
+        label=f"bespoke preamble (n={_sigma_bespoke.size})",
+        color="#4c72b0",
+    )
+    _ax.hist(
+        _sigma_pymc,
+        bins=_bins,
+        alpha=0.55,
+        density=True,
+        label=f"pymc-bart (n={_sigma_pymc.size})",
+        color="#c44e52",
+    )
+    _ax.axvline(1.0, color="#333", ls="--", lw=1, label=r"true $\sigma = 1$")
+    _ax.set_xlabel(r"$\sigma$")
+    _ax.set_ylabel("posterior density")
+    _ax.set_title("σ posterior on Friedman — bespoke preamble vs. pymc-bart")
+    _ax.legend(frameon=False)
+    _fig.tight_layout()
+    _fig
+    return
+
+
+@app.cell
+def _(np):
+    import os
+    from pathlib import Path
+    import polars as pl
+
+    def load_gss():
+        override = os.environ.get("GSS_CSV")
+        candidates = []
+        if override:
+            candidates.append(Path(override))
+        candidates.extend(
+            [
+                Path.cwd() / "data" / "gss_2022.csv",
+                Path.home() / "repos" / "Koenigsberg_Bayes" / "data" / "gss_2022.csv",
+            ]
+        )
+        for p in candidates:
+            if p.exists():
+                return pl.read_csv(p)
+        raise FileNotFoundError(
+            "gss_2022.csv not found. Set GSS_CSV env var, place the file at "
+            "./data/gss_2022.csv, or clone the Koenigsberg_Bayes repo."
+        )
+
+    _gss_raw = load_gss()
+    # Response + predictors
+    _cont = ["age"]
+    _ordinal = ["stress", "feelnerv", "worry", "anxiety", "finrela"]
+    _categ = ["sex", "degree", "race", "relig"]
+    _cols = ["satjob"] + _cont + _ordinal + _categ
+
+    _df = _gss_raw.select(_cols).drop_nulls()
+    y_ord = _df["satjob"].to_numpy().astype(int) - 1  # shift to {0,1,2,3}
+
+    # One-hot encode the low-card categoricals; keep continuous + ordinal as-is.
+    _X_parts = [_df[_cont + _ordinal].to_numpy().astype(float)]
+    for c in _categ:
+        _dummies = _df[c].to_dummies(drop_first=True).to_numpy().astype(float)
+        _X_parts.append(_dummies)
+    X_ord = np.concatenate(_X_parts, axis=1)
+
+    f"n={len(y_ord)}, p={X_ord.shape[1]}, classes={np.bincount(y_ord).tolist()}"
+    return Path, X_ord, os, pl, y_ord
+
+
+@app.cell
+def _(X_ord, np, pm, pmb, y_ord):
+    with pm.Model() as model_sat:
+        η = pmb.BART("η", X=X_ord, Y=y_ord.astype(float), m=50)
+        γ_free = pm.Normal(
+            "γ_free",
+            mu=np.array([1.0, 2.0]),
+            sigma=1.0,
+            size=2,
+            transform=pm.distributions.transforms.ordered,
+            initval=np.array([1.0, 2.0]),
+        )
+        cutpoints = pm.Deterministic(
+            "cutpoints", pm.math.concatenate([[0.0], γ_free])
+        )
+        pm.OrderedProbit(
+            "y", eta=η, cutpoints=cutpoints, observed=y_ord, compute_p=False
+        )
+        idata_sat = pm.sample(
+            draws=500,
+            tune=500,
+            chains=2,
+            cores=1,
+            random_seed=20260423,
+            progressbar=False,
+        )
+    return (idata_sat,)
+
+
+@app.cell
+def _(az, idata_sat):
+    _summary = az.summary(
+        idata_sat,
+        var_names=["γ_free"],
+        round_to=3,
+    )
+    _summary
+    return
+
+
+@app.cell(hide_code=True)
+def _(X_ord, idata_sat, pmb):
+    # Variable importance: ranks predictor columns by inclusion frequency.
+    _ax = pmb.plot_variable_importance(
+        idata_sat,
+        bartrv=idata_sat.posterior["η"],
+        X=X_ord,
+    )
+    _ax
+    return
+
+
+@app.cell
+def _():
     import marimo as mo
 
     return (mo,)
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 8 &nbsp; PG-BART: a better sampler
-
-    MH grow/prune is charmingly simple, but it moves **one leaf at a time**.
-    If the posterior has two well-separated modes — say, "split on $x_2$ at
-    the root" vs. "split on $x_5$ at the root" — the only way to get from one
-    to the other is to prune the tree back to a stump and then grow the other
-    direction, and the intermediate stump has low marginal likelihood, so the
-    chain rarely accepts it. In practice the chain can get stuck.
-
-    Lakshminarayanan, Roy & Teh (2015) replace this local MH move with a
-    **non-local proposal**: at each tree update, run a small sequential
-    Monte Carlo sampler that grows a whole fresh tree from scratch, with
-    resampling focussing compute on the promising branches, and then swap
-    the tree in. This is what `pymc-bart` actually does.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### Particle Gibbs: the idea
-
-    Keep $N$ candidate trees ("particles") in flight. Evolve them level-by-level:
-    at depth $d$, every particle independently decides — for each of its leaves
-    currently at depth $d$ — whether to split (with prior probability
-    $p_{\text{split}}(d) = \alpha(1+d)^{-\beta}$) and, if so, draws a uniform
-    (variable, cut). After each level we reweight each particle by the gain in
-    $\log p(r \mid T, \sigma)$ and **resample** — promising structures
-    replicate, unpromising ones die.
-
-    To make this a valid Markov-chain update we use **conditional SMC**: one
-    particle is fixed to be the *current* tree for tree $j$ (the "reference
-    particle"). The remaining particles propose fresh alternatives; we keep
-    one at random proportional to its final weight.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### Smoke test
-
-    Recovering a 1-D step function with a single tree. If the sampler works,
-    left-side predictions cluster near $-1$ and right-side near $+1$.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### The full PG-BART sampler
-
-    `run_bart_pg` is a mechanical substitution: replace the MH grow/prune
-    update inside `run_bart`'s backfitting loop with `particle_gibbs_tree`,
-    passing the *current* tree as the reference particle. Leaf draws,
-    $\sigma^2$ updates, and snapshot bookkeeping are unchanged.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### Side-by-side: MH-BART vs PG-BART on Friedman
-
-    We compare on a deliberately constrained budget — small $m$, short chain —
-    so mixing differences are visible. Both samplers target the *same*
-    posterior, but on a short chain the more-autocorrelated sampler may report
-    a posterior mean that simply reflects wherever the chain got stuck rather
-    than the true centre.
-
-    What to look for in the plots below:
-
-    1. **MH-BART's $\sigma$ trace** has long runs of near-identical draws
-       (rejected proposals); **PG-BART's** moves every step.
-    2. **PG-BART's ESS** grows roughly linearly with iteration count;
-       MH-BART's grows much more slowly and plateaus early. A higher ESS per
-       unit of compute is the whole pitch of PG-BART, and the effect is
-       visible even on this small budget.
-
-    The two $\sigma$ posterior means may not agree here — MH's ESS is low
-    enough that its chain hasn't explored, so its mean is a sample artefact,
-    not a reliable estimate. Run MH longer (or at a larger $m$) and it
-    converges to the same target as PG.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### Trace and running-ESS diagnostics
-
-    Two panels:
-
-    - $\sigma$ **trace** — overlay of the two chains. MH-BART typically shows
-      visible staircasing (consecutive draws stuck at the same value because
-      every grow/prune was rejected) whereas PG-BART moves on every step.
-    - **Running ESS** — effective sample size of $\sigma$ computed on the
-      growing prefix of the chain. Since PG-BART has lower autocorrelation,
-      its running ESS grows roughly linearly with iteration count; MH-BART's
-      growth is much slower.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### When to prefer which
-
-    - **Use MH-BART** when you want the sampler you can read top-to-bottom,
-      or the trees are small so local moves are enough (CGM's defaults with
-      $m=200$, $(\alpha, \beta) = (0.95, 2)$ keep most trees at 2–3 leaves).
-    - **Use PG-BART** when the truth needs deeper trees ($\beta \le 1$, or a
-      small $m$), or when long runs are showing poor mixing. It's also
-      easier to parallelise (each particle's SMC run is independent).
-
-    `pymc-bart` implements the PG-BART version with extra tricks for
-    performance — the sampler in this notebook is the minimal pedagogical
-    form of the same idea.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 9 &nbsp; Regression on Friedman's test function
-
-    CGM98 Section 5.2.1. The underlying signal is
-
-    $$
-        f(x) = 10\sin(\pi x_1 x_2) + 20(x_3 - 0.5)^2 + 10 x_4 + 5 x_5,
-    $$
-
-    defined on $[0,1]^{10}$; $x_6, \ldots, x_{10}$ are pure noise we hand BART
-    to see if it resists them. Paper defaults: $n=100$ train, $n=200$ test,
-    $m=200$ trees, $(\nu, q, k) = (3, 0.9, 2)$. Training response gets
-    Gaussian noise with $\sigma = 1$.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 10 &nbsp; BART for classification
-
-    For binary $Y$, CGM98 follow Albert & Chib (1993): introduce a latent
-    $Z_i$ with
-
-    $$
-        Z_i \mid x, G, Y_i = 1 \;\sim\; \mathcal{TN}(G(x_i), 1; \;[0,\infty)),
-        \qquad
-        Z_i \mid x, G, Y_i = 0 \;\sim\; \mathcal{TN}(G(x_i), 1; \;(-\infty,0]),
-    $$
-
-    where $G(x) = \sum_j g(x; T_j, M_j)$ lives on the probit scale and
-    $p(x) = \Phi(G(x))$. Given $Z$, the sum-of-trees becomes a Gaussian
-    regression with known $\sigma = 1$ — so the *exact same* backfitting
-    sweep works.
-
-    Two changes to the prior:
-
-    - $\sigma$ is fixed at $1$, not sampled.
-    - $\sigma_\mu = 3 / (k\sqrt{m})$ — the extra factor of 6 (vs. the
-      regression $0.5/(k\sqrt{m})$) is because $G$ lives on the probit scale
-      and $\pm 3$ covers most of $\Phi$'s probability mass (paper Eq. 24).
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### Probit BART on a simulated classification task
-
-    $n = 500$ train, 20 predictors with only $x_1, x_2, x_3$ active. With
-    $m=50$ trees (paper's drug-discovery setting) we expect calibration on
-    the test set to hug the 45° line and the top-20 scored cases to be
-    enriched for the active class.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 11 &nbsp; Discrete-time survival
-
-    A survival problem with time measured in integer units and competing
-    hazards at each interval becomes a classification problem on the
-    *person–time* data set: for every (subject, $t$) row where the subject
-    was still at risk, model $\Pr(\text{event at } t \mid x)$ with BART probit.
-
-    The running $\hat\Pr$ at each $t$ are the discrete hazards, and
-    $S(t \mid x) = \prod_{s \le t}\!(1 - \hat h_s(x))$ turns them back into a
-    survival curve — with uncertainty carried through every product because
-    each $\hat h_s$ is a posterior draw.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## 12 &nbsp; Takeaways
-
-    - BART is a sum of hundreds of tiny trees with priors that keep them
-      *tiny*. The posterior concentrates not because any single tree is
-      confident but because the ensemble votes.
-    - Bayesian backfitting factorises the problem: each tree is a one-tree
-      regression on partial residuals. The sampler is just MH on tree
-      structure + Gibbs on leaves + Gibbs on $\sigma$.
-    - Because $\mu$ marginalises out of the MH step, we never need
-      reversible-jump.
-    - The same machinery handles classification (Albert–Chib latent $Z$) and
-      discrete-time survival (person–time data).
-
-    **Further reading.**
-    Chipman et al. 2010 (original paper);
-    Pratola, Chipman, et al. 2013 (parallel BART);
-    Lakshminarayanan, Roy & Teh 2015 (Particle Gibbs for BART — subject of
-    the next notebook section);
-    `pymc-bart` — production-grade implementation used by this tutorial's
-    author in practice.
-    """)
-    return
 
 
 if __name__ == "__main__":
