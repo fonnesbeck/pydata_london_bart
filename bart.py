@@ -754,14 +754,24 @@ def _(
         q=0.9,
         n_particles=10,
         max_depth=4,
+        batch_frac=1.0,
         sigma2_init=None,
         rng=None,
         verbose=False,
         thin=1,
     ):
-        """BART fit with particle-Gibbs tree updates in place of MH grow/prune."""
+        """BART fit with particle-Gibbs tree updates in place of MH grow/prune.
+
+        ``batch_frac`` controls what fraction of the m trees is refreshed per
+        sweep. ``pymc-bart`` defaults to 0.1 (only 10% of trees touched per step)
+        because each PG tree update is much more expensive than an MH grow/prune
+        and most trees are already near-stationary. We default to 1.0 so the
+        outer loop matches MH-BART tree-for-tree; pass ``batch_frac=0.1`` to
+        recover the pymc-bart behaviour.
+        """
         if rng is None:
             rng = np.random.default_rng()
+        batch_size = max(1, int(np.ceil(batch_frac * m)))
 
         y_min, y_max = float(y.min()), float(y.max())
         y_range = y_max - y_min
@@ -784,7 +794,11 @@ def _(
         kept = 0
 
         for it in mo.status.progress_bar(range(n_iter), title="PG-BART sampling"):
-            for j in range(m):
+            if batch_size >= m:
+                batch = range(m)
+            else:
+                batch = rng.choice(m, size=batch_size, replace=False)
+            for j in batch:
                 Rj = y_scaled - tree_preds.sum(axis=0) + tree_preds[j]
                 trees[j] = particle_gibbs_tree(
                     X,
@@ -945,7 +959,6 @@ def _(np, rng):
             y = y + rng.normal(0, noise, size=y.shape[0])
         return y
 
-
     # Paper §5.2.1 defaults: n=100, p=10.
     n_train, n_feat = 100, 10
     X_fried = rng.uniform(size=(n_train, n_feat))
@@ -1049,6 +1062,113 @@ def _(
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        r"""
+        ### How many trees? — choosing $m$
+
+        BART has one knob whose right value is genuinely problem-dependent:
+        $m$, the number of trees in the ensemble.  Quiroga *et al.* (2022)
+        recommend $m \approx 50$ for exploration and variable-importance work
+        and $m \approx 200$ for the final inference.  The intuition:
+
+        * Each tree absorbs a *small* piece of $f(x)$.  More trees → finer
+          decomposition → smoother fit, but with diminishing returns.
+        * Linero & Yang (2018) show that as $m \to \infty$ the BART prior
+          converges to a (nowhere-differentiable) Gaussian Process, which
+          explains why "more trees" keeps helping for a while.
+        * `pymc-bart` lets users compare $m$ values via PSIS-LOO-CV
+          (`az.compare`); we'll skip that machinery here and just look at the
+          σ posterior, in-sample coverage, and out-of-sample MSE on the
+          Friedman DGP — three quantities that move together as $m$ grows.
+
+        The cell below is **disabled by default** (it refits BART three times).
+        Toggle the cell on to run the comparison.
+        """
+    )
+    return
+
+
+@app.cell(disabled=True, hide_code=True)
+def _(
+    X_fried,
+    X_fried_test,
+    friedman,
+    np,
+    plt,
+    predict_at,
+    run_bart,
+    y_fried,
+    y_fried_test_true,
+):
+    _ms = [10, 50, 200]
+    _colors = ["#dd8452", "#4c72b0", "#c44e52"]
+    _fits = {}
+    for _m in _ms:
+        _fits[_m] = run_bart(
+            X_fried,
+            y_fried,
+            m=_m,
+            n_iter=500,
+            burn_in=200,
+            thin=1,
+            alpha=0.95,
+            beta=2.0,
+            k=2.0,
+            nu=3.0,
+            q=0.9,
+            rng=np.random.default_rng(20260423),
+        )
+
+    _f_true_in = friedman(X_fried, noise=0.0)
+    _fig, _axes = plt.subplots(1, 3, figsize=(13, 3.8))
+
+    for _m, _c in zip(_ms, _colors):
+        _sd = _fits[_m]["sigma_draws"]
+        _axes[0].hist(
+            _sd,
+            bins=30,
+            density=True,
+            alpha=0.5,
+            color=_c,
+            label=f"m={_m} (mean σ={_sd.mean():.2f})",
+        )
+    _axes[0].axvline(1.0, color="#333", ls="--", lw=1)
+    _axes[0].set_xlabel(r"$\sigma$")
+    _axes[0].set_ylabel("posterior density")
+    _axes[0].set_title("σ posterior shrinks as m grows")
+    _axes[0].legend(frameon=False, fontsize=8)
+
+    _cov_in = []
+    for _m in _ms:
+        _lo = _fits[_m]["f_lo"]
+        _hi = _fits[_m]["f_hi"]
+        _cov_in.append(((_lo <= _f_true_in) & (_f_true_in <= _hi)).mean())
+    _axes[1].bar([str(m) for m in _ms], _cov_in, color=_colors, edgecolor="white")
+    _axes[1].axhline(0.9, color="#333", ls="--", lw=1, label="nominal 90%")
+    _axes[1].set_ylim(0, 1.05)
+    _axes[1].set_xlabel("m (number of trees)")
+    _axes[1].set_ylabel("in-sample 90% coverage of f")
+    _axes[1].set_title("Coverage stays calibrated")
+    _axes[1].legend(frameon=False)
+
+    _mse_oos = []
+    for _m in _ms:
+        _draws = predict_at(_fits[_m], X_fried_test)
+        _f_mean = _draws.mean(axis=0)
+        _mse_oos.append(float(np.mean((_f_mean - y_fried_test_true) ** 2)))
+    _axes[2].bar([str(m) for m in _ms], _mse_oos, color=_colors, edgecolor="white")
+    _axes[2].set_xlabel("m (number of trees)")
+    _axes[2].set_ylabel("out-of-sample MSE")
+    _axes[2].set_title("Test-set fit improves with m")
+
+    _fig.suptitle("Choosing m on the Friedman DGP (n=100, σ=1)", y=1.02)
+    _fig.tight_layout()
+    _fig
+    return
+
+
 @app.cell
 def _(Path, os, pl):
     # 2024 British Grand Prix lap data (FastF1 / F1 live timing API).
@@ -1065,11 +1185,7 @@ def _(Path, os, pl):
         candidates.extend(
             [
                 Path.cwd() / "data" / "f1_laps.csv",
-                Path.home()
-                / "repos"
-                / "pydata_london_bart"
-                / "data"
-                / "f1_laps.csv",
+                Path.home() / "repos" / "pydata_london_bart" / "data" / "f1_laps.csv",
             ]
         )
         for p in candidates:
@@ -1080,7 +1196,6 @@ def _(Path, os, pl):
             "at ./data/f1_laps.csv. Regenerate with scripts/pull_f1_laps.py "
             "(requires fastf1 + an internet connection on first run)."
         )
-
 
     f1_df = load_f1_laps()
     f1_df.shape
@@ -1104,16 +1219,11 @@ def _(f1_df, np):
     ]
     # MEDIUM is the baseline; the three indicator columns capture the rest.
     _compounds_in_data = ["SOFT", "HARD", "INTERMEDIATE"]
-    f1_feature_names = list(_num_cols) + [
-        f"compound_{c}" for c in _compounds_in_data
-    ]
+    f1_feature_names = list(_num_cols) + [f"compound_{c}" for c in _compounds_in_data]
 
     _X_num = f1_df.select(_num_cols).to_numpy().astype(float)
     _X_cmp = np.column_stack(
-        [
-            (f1_df["compound"].to_numpy() == c).astype(float)
-            for c in _compounds_in_data
-        ]
+        [(f1_df["compound"].to_numpy() == c).astype(float) for c in _compounds_in_data]
     )
     _X = np.concatenate([_X_num, _X_cmp], axis=1)
     _y = f1_df["lap_time_s"].to_numpy().astype(float)
@@ -1171,8 +1281,7 @@ def _(X_train, fit, np, plt, predict_at, y_train):
     _f_draws_in = predict_at(fit, X_train)
     _rng_pp = np.random.default_rng(20260423)
     _pp_draws_in = (
-        _f_draws_in
-        + _rng_pp.standard_normal(_f_draws_in.shape) * _sigma_in[:, None]
+        _f_draws_in + _rng_pp.standard_normal(_f_draws_in.shape) * _sigma_in[:, None]
     )
     _pp_lo_in = np.quantile(_pp_draws_in, 0.05, axis=0)
     _pp_hi_in = np.quantile(_pp_draws_in, 0.95, axis=0)
@@ -1273,9 +1382,7 @@ def _(f_test_mean, np, plt, pp_test_hi, pp_test_lo, y_test):
     _ax.set_xlim(_lim)
     _ax.set_ylim(_lim)
     _ax.set_xlabel("observed lap time (s) — held-out laps")
-    _ax.set_ylabel(
-        r"posterior mean $\hat f(x)$ with 90% posterior-predictive interval"
-    )
+    _ax.set_ylabel(r"posterior mean $\hat f(x)$ with 90% posterior-predictive interval")
     _ax.set_title(f"Out-of-sample predictive coverage: {_covered.mean():.0%}")
     _fig.tight_layout()
     _fig
@@ -1328,7 +1435,6 @@ def _(X_train, f1_feature_names, fit, np, plt, predict_at):
             pdp_draws[:, k] = draws.mean(axis=1)
         return xs, pdp_draws
 
-
     _n_feat = X_train.shape[1]
     _ncols = 4
     _nrows = (_n_feat + _ncols - 1) // _ncols
@@ -1347,6 +1453,430 @@ def _(X_train, f1_feature_names, fit, np, plt, predict_at):
     for v in range(_n_feat, _axes.size):
         _axes.flat[v].axis("off")
     _fig.suptitle("Partial dependence of lap time (s) on each feature", y=1.01)
+    _fig.tight_layout()
+    _fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        r"""
+        ### How many variables actually matter?
+
+        The inclusion-frequency bar chart above ranks variables by how often
+        BART chose to split on each one — useful, but not directly answering
+        "would my predictions get worse if I dropped these last $p - k$
+        variables?".
+
+        Quiroga *et al.* (2022) propose a richer estimator that *uses the same
+        posterior trees we already drew*: for each top-$k$ subset (top-1, then
+        top-2, …, all $p$), prune posterior trees by collapsing every split on
+        an excluded variable into a leaf carrying the mean $\mu$ of its old
+        subtree, then predict through the pruned ensemble. The reported
+        $R^2_k$ is the coefficient of determination between the full-model
+        predictions and the restricted-model predictions:
+
+        $$
+        R^2_k \;=\; 1 - \frac{\operatorname{Var}\!\bigl(\hat f^{\text{full}}(x)
+        - \hat f^{\text{restricted}}_k(x)\bigr)}
+        {\operatorname{Var}\!\bigl(\hat f^{\text{full}}(x)\bigr)}.
+        $$
+
+        Read the curve from left to right: the point where it flattens tells
+        you how many variables are doing real work.
+        """
+    )
+    return
+
+
+@app.cell
+def _(np):
+    def prune_to_subset(tree, kept_vars):
+        """Return a copy of `tree` with all splits on excluded variables collapsed.
+
+        Each excluded internal node is turned into a leaf whose μ is the
+        unweighted mean of the leaf μ values in the subtree it used to root.
+        Descendant slots become unreachable but stay in the parallel arrays —
+        ``predict`` only walks the reachable subtree from node 0.
+        """
+        new_tree = tree.copy()
+        kept = set(int(v) for v in kept_vars)
+        stack = [0]
+        while stack:
+            node = stack.pop()
+            if new_tree.is_leaf(node):
+                continue
+            if new_tree.split_var[node] not in kept:
+                leaf_mus = []
+                sub = [node]
+                while sub:
+                    i = sub.pop()
+                    if new_tree.is_leaf(i):
+                        leaf_mus.append(new_tree.mu[i])
+                    else:
+                        sub.append(new_tree.left[i])
+                        sub.append(new_tree.right[i])
+                new_tree.split_var[node] = -1
+                new_tree.split_val[node] = 0.0
+                new_tree.left[node] = -1
+                new_tree.right[node] = -1
+                new_tree.mu[node] = float(np.mean(leaf_mus))
+            else:
+                stack.append(new_tree.left[node])
+                stack.append(new_tree.right[node])
+        return new_tree
+
+    return (prune_to_subset,)
+
+
+@app.cell(hide_code=True)
+def _(
+    X_train,
+    f1_feature_names,
+    fit,
+    inclusion,
+    np,
+    plt,
+    predict,
+    predict_at,
+    prune_to_subset,
+):
+    # Top-k restricted-model R² (Quiroga §4.1). Use a subsample of posterior
+    # draws to keep this evaluation under ~30s — the curve is stable.
+    _ranking = list(np.argsort(-inclusion))
+    _p = len(_ranking)
+
+    _full_pred = predict_at(fit, X_train).mean(axis=0)
+
+    _snaps = fit["tree_snapshots"]
+    _n_sub = min(150, len(_snaps))
+    _idx_sub = np.linspace(0, len(_snaps) - 1, _n_sub, dtype=int)
+
+    _y_min, _y_range = fit["y_min"], fit["y_range"]
+    _r2_curve = []
+    for _k in range(1, _p + 1):
+        _kept = _ranking[:_k]
+        _restricted_draws = np.zeros((_n_sub, X_train.shape[0]))
+        for _di, _snap_idx in enumerate(_idx_sub):
+            _trees = fit["tree_snapshots"][_snap_idx]
+            _f_scaled = np.zeros(X_train.shape[0])
+            for _t in _trees:
+                _t_pruned = prune_to_subset(_t, _kept)
+                _f_scaled += predict(_t_pruned, X_train)
+            _restricted_draws[_di] = _f_scaled * _y_range + (_y_min + 0.5 * _y_range)
+        _restricted_mean = _restricted_draws.mean(axis=0)
+        _r2 = 1.0 - np.var(_full_pred - _restricted_mean) / np.var(_full_pred)
+        _r2_curve.append(float(_r2))
+
+    _fig, _ax = plt.subplots(figsize=(7, 3.8))
+    _xs = np.arange(1, _p + 1)
+    _ax.plot(_xs, _r2_curve, "o-", color="#4c72b0", lw=1.6)
+    _ax.axhline(0.95, color="#c44e52", ls="--", lw=1, label=r"$R^2 = 0.95$")
+    _ax.set_xticks(_xs)
+    _ax.set_xticklabels(
+        [f1_feature_names[_ranking[i]] for i in range(_p)],
+        rotation=45,
+        ha="right",
+        fontsize=8,
+    )
+    _ax.set_xlabel("variables included (cumulative, by inclusion rank)")
+    _ax.set_ylabel(r"$R^2$ vs. full-model predictions")
+    _ax.set_title("Restricted-model R² — when does adding variables stop helping?")
+    _ax.set_ylim(0, 1.02)
+    _ax.legend(frameon=False, loc="lower right")
+    _fig.tight_layout()
+    _fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        r"""
+        ### Sparsity in high-dimensional $X$ — Linero's prior
+
+        The default BART prior draws splitting variables uniformly from
+        $\{1, \dots, p\}$.  When most of those $p$ covariates are irrelevant
+        — common in genomics, drug discovery, or any "throw everything at
+        it" workflow — uniform sampling wastes proposal mass on noise.
+
+        Linero (2018) replaces the uniform draw with a Dirichlet–categorical:
+
+        $$
+        s \;\sim\; \operatorname{Dir}\!\left(\tfrac{a}{p}, \dots, \tfrac{a}{p}\right),
+        \qquad
+        v \mid s \;\sim\; \operatorname{Cat}(s).
+        $$
+
+        With $a$ small the prior concentrates mass on a few variables; with
+        $a$ large it approaches uniform.  We sample $s$ adaptively during
+        burn-in by a conjugate Dirichlet update from the current split counts,
+        then freeze $s$ for the post-burn-in draws.
+
+        The MH derivation is unchanged: as long as the *proposal* draws
+        $v$ from the same $s$, the prior–proposal factor cancels exactly,
+        and the existing acceptance ratio is correct.
+        """
+    )
+    return
+
+
+@app.cell
+def _(log_marginal_tree, np, splittable_cuts):
+    def grow_proposal_sparse(
+        tree, X, leaf_of, r, rng, alpha, beta, sigma2, sigma_mu2, split_prob
+    ):
+        """grow_proposal with split-variable drawn from `split_prob` (instead of uniform).
+
+        Both the prior and the proposal use ``split_prob`` for the variable
+        choice, so the variable-choice factor still cancels in the MH ratio
+        and the acceptance formula is identical to the uniform case.
+        """
+        leaves = tree.leaves()
+        lf = leaves[rng.integers(len(leaves))]
+        mask = leaf_of == lf
+        if int(mask.sum()) < 2:
+            return None, -np.inf
+        X_leaf = X[mask]
+
+        chosen_col = int(rng.choice(len(split_prob), p=split_prob))
+        cuts = splittable_cuts(X_leaf, chosen_col)
+        if cuts.size == 0:
+            return None, -np.inf
+        chosen_cut = float(rng.choice(cuts))
+
+        t_new = tree.copy()
+        d = tree.depth_of(lf)
+        new_left = len(t_new.split_var)
+        new_right = new_left + 1
+        t_new.split_var[lf] = chosen_col
+        t_new.split_val[lf] = chosen_cut
+        t_new.left[lf] = new_left
+        t_new.right[lf] = new_right
+        t_new.split_var += [-1, -1]
+        t_new.split_val += [0.0, 0.0]
+        t_new.left += [-1, -1]
+        t_new.right += [-1, -1]
+        t_new.parent += [lf, lf]
+        t_new.mu += [0.0, 0.0]
+
+        ll_new = log_marginal_tree(t_new, X, r, sigma2, sigma_mu2)
+        ll_old = log_marginal_tree(tree, X, r, sigma2, sigma_mu2)
+
+        p_split_d = alpha * (1.0 + d) ** (-beta)
+        p_split_d1 = alpha * (2.0 + d) ** (-beta)
+        log_shape_ratio = (
+            np.log(p_split_d) + 2.0 * np.log(1.0 - p_split_d1) - np.log(1.0 - p_split_d)
+        )
+
+        b = len(leaves)
+        P_grow_fwd = 1.0 if len(tree.internal_nodes()) == 0 else 0.5
+        P_prune_bwd = 0.5
+        w_new = len(t_new.singly_internal())
+        log_move_ratio = np.log(P_prune_bwd / P_grow_fwd) + np.log(b / w_new)
+
+        log_accept = (ll_new - ll_old) + log_shape_ratio + log_move_ratio
+        return t_new, log_accept
+
+    return (grow_proposal_sparse,)
+
+
+@app.cell
+def _(
+    assign_leaves,
+    calibrate_sigma_prior,
+    draw_leaf_values,
+    draw_sigma2,
+    grow_proposal_sparse,
+    mo,
+    np,
+    predict,
+    prune_proposal,
+):
+    def run_bart_sparse(
+        X,
+        y,
+        m=50,
+        n_iter=1000,
+        burn_in=500,
+        alpha=0.95,
+        beta=2.0,
+        k=2.0,
+        nu=3.0,
+        q=0.9,
+        dirichlet_a=1.0,
+        sigma2_init=None,
+        rng=None,
+        thin=1,
+    ):
+        """MH-BART with adaptive Dirichlet prior on splitting variable.
+
+        During burn-in we re-sample ``split_prob ~ Dir(a/p + counts)`` once per
+        sweep, where ``counts`` is the current per-variable split count summed
+        across all m trees. After burn-in ``split_prob`` is frozen at its
+        current value.
+        """
+        if rng is None:
+            rng = np.random.default_rng()
+
+        y_min, y_max = float(y.min()), float(y.max())
+        y_range = y_max - y_min
+        y_scaled = (y - y_min) / y_range - 0.5
+        sigma_hat, lam = calibrate_sigma_prior(y_scaled, X, nu=nu, q=q)
+        sigma2 = sigma_hat**2 if sigma2_init is None else float(sigma2_init)
+        sigma_mu = 0.5 / (k * np.sqrt(m))
+        sigma_mu2 = sigma_mu**2
+
+        n, p = X.shape
+        trees = [Tree() for _ in range(m)]
+        tree_preds = np.zeros((m, n))
+        split_prob = np.full(p, 1.0 / p)
+
+        n_kept = (n_iter - burn_in + thin - 1) // thin
+        f_draws = np.zeros((n_kept, n))
+        sigma2_draws = np.zeros(n_kept)
+        splits = np.zeros((n_kept, p), dtype=np.int64)
+        split_prob_history = np.zeros((n_iter, p))
+        kept = 0
+
+        for it in mo.status.progress_bar(range(n_iter), title="sparse-BART sampling"):
+            if it < burn_in:
+                counts = np.zeros(p, dtype=float)
+                for t in trees:
+                    for v in t.split_var:
+                        if v >= 0:
+                            counts[v] += 1
+                split_prob = rng.dirichlet(dirichlet_a / p + counts)
+            split_prob_history[it] = split_prob
+
+            for j in range(m):
+                Rj = y_scaled - tree_preds.sum(axis=0) + tree_preds[j]
+                if not trees[j].internal_nodes():
+                    move = "grow"
+                else:
+                    move = "grow" if rng.random() < 0.5 else "prune"
+                if move == "grow":
+                    leaf_of = assign_leaves(trees[j], X)
+                    t_new, logA = grow_proposal_sparse(
+                        trees[j],
+                        X,
+                        leaf_of,
+                        Rj,
+                        rng,
+                        alpha,
+                        beta,
+                        sigma2,
+                        sigma_mu2,
+                        split_prob,
+                    )
+                    if t_new is not None and np.log(rng.random()) < logA:
+                        trees[j] = t_new
+                else:
+                    t_new, logA = prune_proposal(
+                        trees[j], X, Rj, rng, alpha, beta, sigma2, sigma_mu2
+                    )
+                    if t_new is not None and np.log(rng.random()) < logA:
+                        trees[j] = t_new
+                trees[j] = draw_leaf_values(trees[j], X, Rj, rng, sigma2, sigma_mu2)
+                tree_preds[j] = predict(trees[j], X)
+
+            f_hat = tree_preds.sum(axis=0)
+            sigma2 = draw_sigma2(y_scaled - f_hat, nu, lam, rng)
+
+            if it >= burn_in and ((it - burn_in) % thin == 0):
+                f_draws[kept] = f_hat
+                sigma2_draws[kept] = sigma2
+                for t in trees:
+                    for v in t.split_var:
+                        if v >= 0:
+                            splits[kept, v] += 1
+                kept += 1
+
+        return {
+            "sigma_draws": np.sqrt(sigma2_draws[:kept]) * y_range,
+            "f_mean": f_draws[:kept].mean(axis=0) * y_range + (y_min + 0.5 * y_range),
+            "splits": splits[:kept],
+            "split_prob_history": split_prob_history,
+            "split_prob_final": split_prob,
+        }
+
+    return (run_bart_sparse,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        r"""
+        #### Demo: Friedman with $p = 100$, only 5 relevant variables
+
+        We simulate Friedman's function plus 95 columns of pure noise.  The
+        plot below shows inclusion frequencies for two MH-BART runs on the
+        same data: one with the uniform prior (left) and one with the
+        adaptive Dirichlet prior (right).  The Dirichlet version should
+        concentrate sharply on $X_0..X_4$, mirroring Quiroga *et al.* Figure 13.
+
+        Cell is **disabled by default** (it fits two BART models on $p = 100$).
+        """
+    )
+    return
+
+
+@app.cell(disabled=True, hide_code=True)
+def _(friedman, np, plt, run_bart, run_bart_sparse):
+    _rng_sp = np.random.default_rng(20260423)
+    _n_sp = 150
+    _p_sp = 100
+    _X_sp_relevant = _rng_sp.uniform(size=(_n_sp, 5))
+    _X_sp_noise = _rng_sp.uniform(size=(_n_sp, _p_sp - 5))
+    _X_sp = np.concatenate([_X_sp_relevant, _X_sp_noise], axis=1)
+    _y_sp = friedman(_X_sp, noise=1.0, rng=_rng_sp)
+
+    _kw = dict(
+        m=20,
+        n_iter=400,
+        burn_in=200,
+        alpha=0.95,
+        beta=2.0,
+        k=2.0,
+        nu=3.0,
+        q=0.9,
+        rng=np.random.default_rng(20260423),
+    )
+    _fit_uni = run_bart(_X_sp, _y_sp, **_kw)
+    _fit_sp = run_bart_sparse(_X_sp, _y_sp, dirichlet_a=1.0, **_kw)
+
+    def _inclusion(splits):
+        tot = splits.sum(axis=1, keepdims=True)
+        tot = np.where(tot == 0, 1, tot)
+        return (splits / tot).mean(axis=0)
+
+    _inc_uni = _inclusion(_fit_uni["splits"])
+    _inc_sp = _inclusion(_fit_sp["splits"])
+
+    _fig, _axes = plt.subplots(1, 2, figsize=(11, 3.6), sharey=True)
+    _xs = np.arange(_p_sp)
+    for _ax, _inc, _title in [
+        (
+            _axes[0],
+            _inc_uni,
+            f"uniform 1/p prior  (max irrelevant: {_inc_uni[5:].max():.3f})",
+        ),
+        (
+            _axes[1],
+            _inc_sp,
+            f"Dirichlet a=1 prior  (max irrelevant: {_inc_sp[5:].max():.3f})",
+        ),
+    ]:
+        _colors = ["#c44e52" if i < 5 else "#bbb" for i in _xs]
+        _ax.bar(_xs, _inc, color=_colors, edgecolor="white")
+        _ax.set_xlabel("variable index")
+        _ax.set_title(_title)
+    _axes[0].set_ylabel("inclusion frequency")
+    _fig.suptitle(
+        "Sparsity-inducing prior concentrates inclusion on the 5 relevant variables",
+        y=1.02,
+    )
     _fig.tight_layout()
     _fig
     return
@@ -1802,9 +2332,7 @@ def _(X_ord, np, pm, pmb, y_ord):
             transform=pm.distributions.transforms.ordered,
             initval=np.array([1.0, 2.0]),
         )
-        cutpoints = pm.Deterministic(
-            "cutpoints", pm.math.concatenate([[0.0], γ_free])
-        )
+        cutpoints = pm.Deterministic("cutpoints", pm.math.concatenate([[0.0], γ_free]))
         pm.OrderedProbit(
             "y", eta=η, cutpoints=cutpoints, observed=y_ord, compute_p=False
         )
