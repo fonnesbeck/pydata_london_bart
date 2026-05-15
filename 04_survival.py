@@ -51,8 +51,9 @@ def _():
     import pymc as pm
     import pymc_bart as pmb
 
-    rng = np.random.default_rng(20260423)
-    return np, plt, pm, pmb, rng
+    RANDOM_SEED = 20260608
+    rng = np.random.default_rng(RANDOM_SEED)
+    return RANDOM_SEED, np, plt, pm, pmb, rng
 
 
 @app.cell
@@ -83,51 +84,56 @@ def _(np, rng):
 
 
 @app.cell
-def _(pm, pmb, surv_X, surv_y):
+def _(RANDOM_SEED, pm, pmb, surv_X, surv_y):
     # Discrete-time hazards modelled as repeated probit BART. The first
     # column of X is time t; BART learns h(t, x) jointly so the hazard
     # shape doesn't have to be specified up front.
     with pm.Model() as model_surv:
         X_data = pm.Data("X_data", surv_X)
-        eta = pmb.BART("eta", X=X_data, Y=surv_y.astype(float), m=50)
+        eta = pmb.BART("eta", X=X_data, Y=surv_y.astype(float), m=100)
         p = pm.Deterministic("p", pm.math.invprobit(eta))
         pm.Bernoulli("event", p=p, observed=surv_y, shape=p.shape)
         idata_surv = pm.sample(
-            draws=300,
-            tune=300,
-            chains=2,
-            cores=1,
-            random_seed=20260423,
-            progressbar=False,
+            draws=1000,
+            tune=1000,
+            chains=4,
+            random_seed=RANDOM_SEED,
         )
-    return idata_surv, model_surv
+    return eta, idata_surv, model_surv
 
 
 @app.cell
-def _(idata_surv, model_surv, np, pm):
+def _(np):
     # Predict hazards at two contrasting risk profiles, then accumulate
     # into survival curves.
     times = np.arange(1, 13)
     profile_low = np.column_stack([times, np.full(12, -0.8), np.full(12, 0.0)])
     profile_high = np.column_stack([times, np.full(12, 0.8), np.full(12, 0.0)])
     X_profiles = np.concatenate([profile_low, profile_high], axis=0)
+    return X_profiles, times
 
+
+@app.cell
+def _(RANDOM_SEED, X_profiles, idata_surv, model_surv, pm):
     with model_surv:
         pm.set_data({"X_data": X_profiles})
         pp_surv = pm.sample_posterior_predictive(
             idata_surv,
             var_names=["p"],
             predictions=True,
-            random_seed=20260423,
-            progressbar=False,
+            random_seed=RANDOM_SEED,
         )
+    return (pp_surv,)
 
+
+@app.cell
+def _(np, pp_surv):
     _p_draws = pp_surv.predictions["p"].stack(sample=("chain", "draw")).values
     p_low_draws = _p_draws[:12, :].T
     p_high_draws = _p_draws[12:, :].T
     S_low = np.cumprod(1 - p_low_draws, axis=1)
     S_high = np.cumprod(1 - p_high_draws, axis=1)
-    return S_high, S_low, times
+    return S_high, S_low
 
 
 @app.cell(hide_code=True)
@@ -151,6 +157,63 @@ def _(S_high, S_low, np, plt, times):
     _ax.legend(frameon=False)
     _fig.tight_layout()
     _fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        r"""
+        ## Which covariates drive the hazard?
+
+        Variable importance and partial dependence work the same way for
+        the discrete-time hazard model as for regression: the BART RV
+        `eta` is the latent linear predictor of the probit hazard, and
+        the helper functions ask which inputs influence it. The three
+        columns are time $t$, $x_1$, $x_2$. The DGP made $x_1$ a
+        constant-effect risk factor and $x_2$ a time-varying one, so we
+        expect non-trivial importance for both.
+        """
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(eta, idata_surv, model_surv, pm, pmb, surv_X):
+    with model_surv:
+        pm.set_data({"X_data": surv_X})
+        _vi_surv = pmb.compute_variable_importance(idata_surv, eta, surv_X)
+    pmb.plot_variable_importance(_vi_surv, labels=["t", "x1", "x2"])
+    return
+
+
+@app.cell(hide_code=True)
+def _(eta, model_surv, pm, pmb, surv_X, surv_y):
+    with model_surv:
+        pm.set_data({"X_data": surv_X})
+        pmb.plot_pdp(
+            bartrv=eta,
+            X=surv_X,
+            Y=surv_y.astype(float),
+            var_discrete=[0],
+        )
+    return
+
+
+@app.cell(hide_code=True)
+def _(idata_surv, pmb):
+    pmb.plot_convergence(idata_surv, var_name="eta")
+    return
+
+
+@app.cell
+def _(idata_surv):
+    _stats = idata_surv.sample_stats
+    (
+        f"divergences: {int(_stats['diverging'].sum())}"
+        if "diverging" in _stats
+        else "PGBART-only model (no HMC step) — divergence diagnostic not applicable"
+    )
     return
 
 

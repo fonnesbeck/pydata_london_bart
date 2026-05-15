@@ -58,8 +58,9 @@ def _():
     import pymc as pm
     import pymc_bart as pmb
 
-    rng = np.random.default_rng(20260423)
-    return Path, az, np, os, pl, plt, pm, pmb, rng
+    RANDOM_SEED = 20260608
+    rng = np.random.default_rng(RANDOM_SEED)
+    return Path, RANDOM_SEED, az, np, os, pl, plt, pm, pmb, rng
 
 
 @app.cell
@@ -78,35 +79,32 @@ def _(np, rng):
 
 
 @app.cell
-def _(X_cls, pm, pmb, y_cls):
+def _(RANDOM_SEED, X_cls, pm, pmb, y_cls):
     # Probit BART: BART output enters Bernoulli through invprobit. We wrap
     # X in pm.Data so we can swap it for out-of-sample predictions.
     with pm.Model() as model_cls:
         X_data = pm.Data("X_data", X_cls)
-        eta = pmb.BART("eta", X=X_data, Y=y_cls.astype(float), m=50)
+        eta = pmb.BART("eta", X=X_data, Y=y_cls.astype(float), m=100)
         p = pm.Deterministic("p", pm.math.invprobit(eta))
         pm.Bernoulli("y", p=p, observed=y_cls, shape=p.shape)
         idata_cls = pm.sample(
-            draws=300,
-            tune=300,
-            chains=2,
-            cores=1,
-            random_seed=20260423,
-            progressbar=False,
+            draws=1000,
+            tune=1000,
+            chains=4,
+            random_seed=RANDOM_SEED,
         )
     return eta, idata_cls, model_cls
 
 
 @app.cell
-def _(X_cls_test, idata_cls, model_cls, pm):
+def _(RANDOM_SEED, X_cls_test, idata_cls, model_cls, pm):
     with model_cls:
         pm.set_data({"X_data": X_cls_test})
         pp_cls = pm.sample_posterior_predictive(
             idata_cls,
             var_names=["p"],
             predictions=True,
-            random_seed=20260423,
-            progressbar=False,
+            random_seed=RANDOM_SEED,
         )
     return (pp_cls,)
 
@@ -173,6 +171,26 @@ def _(X_cls, eta, idata_cls, model_cls, pm, pmb):
 
 
 @app.cell(hide_code=True)
+def _(idata_cls, pmb):
+    # BART RVs need different convergence diagnostics than scalars:
+    # plot_convergence shows ECDFs of ESS and R-hat across every node
+    # of the BART variable.
+    pmb.plot_convergence(idata_cls, var_name="eta")
+    return
+
+
+@app.cell
+def _(idata_cls):
+    _stats = idata_cls.sample_stats
+    (
+        f"divergences: {int(_stats['diverging'].sum())}"
+        if "diverging" in _stats
+        else "PGBART-only model (no HMC step) — divergence diagnostic not applicable"
+    )
+    return
+
+
+@app.cell(hide_code=True)
 def _(mo):
     mo.md(
         r"""
@@ -233,9 +251,9 @@ def _(Path, np, os, pl):
 
 
 @app.cell
-def _(X_ord, np, pm, pmb, y_ord):
+def _(RANDOM_SEED, X_ord, np, pm, pmb, y_ord):
     with pm.Model() as model_sat:
-        eta_sat = pmb.BART("eta", X=X_ord, Y=y_ord.astype(float), m=50)
+        eta_sat = pmb.BART("eta", X=X_ord, Y=y_ord.astype(float), m=100)
         gamma_free = pm.Normal(
             "gamma_free",
             mu=np.array([1.0, 2.0]),
@@ -251,12 +269,10 @@ def _(X_ord, np, pm, pmb, y_ord):
             "y", eta=eta_sat, cutpoints=cutpoints, observed=y_ord, compute_p=False
         )
         idata_sat = pm.sample(
-            draws=300,
-            tune=300,
-            chains=2,
-            cores=1,
-            random_seed=20260423,
-            progressbar=False,
+            draws=1000,
+            tune=1000,
+            chains=4,
+            random_seed=RANDOM_SEED,
         )
     return eta_sat, idata_sat, model_sat
 
@@ -272,6 +288,20 @@ def _(X_ord, eta_sat, idata_sat, model_sat, pmb):
     with model_sat:
         _vi_sat = pmb.compute_variable_importance(idata_sat, eta_sat, X_ord)
     pmb.plot_variable_importance(_vi_sat)
+    return
+
+
+@app.cell(hide_code=True)
+def _(idata_sat, pmb):
+    pmb.plot_convergence(idata_sat, var_name="eta")
+    return
+
+
+@app.cell
+def _(az, idata_sat):
+    _n_div = int(idata_sat.sample_stats["diverging"].sum())
+    _summary = az.summary(idata_sat, var_names=["gamma_free"], round_to=3)
+    f"divergences: {_n_div}   |   gamma_free max R-hat = {_summary['r_hat'].max():.3f}, min ESS = {_summary['ess_bulk'].min():.0f}"
     return
 
 
