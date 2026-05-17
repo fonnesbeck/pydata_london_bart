@@ -46,6 +46,7 @@ def _():
 
     mp.set_start_method("fork", force=True)
 
+    import arviz as az
     import matplotlib.pyplot as plt
     import numpy as np
     import pymc as pm
@@ -53,7 +54,7 @@ def _():
 
     RANDOM_SEED = 20260608
     rng = np.random.default_rng(RANDOM_SEED)
-    return RANDOM_SEED, np, plt, pm, pmb, rng
+    return RANDOM_SEED, az, np, plt, pm, pmb, rng
 
 
 @app.cell
@@ -120,6 +121,7 @@ def _(RANDOM_SEED, X_profiles, idata_surv, model_surv, pm):
         pp_surv = pm.sample_posterior_predictive(
             idata_surv,
             var_names=["p"],
+            sample_vars=["eta"],
             predictions=True,
             random_seed=RANDOM_SEED,
         )
@@ -201,8 +203,8 @@ def _(eta, model_surv, pm, pmb, surv_X, surv_y):
 
 
 @app.cell(hide_code=True)
-def _(idata_surv, pmb):
-    pmb.plot_convergence(idata_surv, var_name="eta")
+def _(az, idata_surv):
+    az.plot_convergence_dist(idata_surv, var_names=["eta"])
     return
 
 

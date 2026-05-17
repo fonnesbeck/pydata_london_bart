@@ -154,18 +154,19 @@ def _(mo):
     ### Convergence diagnostics for a BART RV
 
     `mu` is a length-$n$ random variable, so `az.plot_trace` produces
-    a wall of densities that is hard to read. `pmb.plot_convergence`
-    instead summarises across all `mu` components: the empirical CDF
-    of effective sample size (left) and of $\hat R$ (right). The
-    dashed lines are the rules-of-thumb (ESS $\ge 400$, $\hat R$
-    below a multiple-comparison-adjusted threshold).
+    a wall of densities that is hard to read.
+    `az.plot_convergence_dist` instead summarises across all `mu`
+    components: the empirical CDF of effective sample size (left) and
+    of $\hat R$ (right). The dashed lines are the rules-of-thumb
+    (ESS $\ge 400$, $\hat R$ below a multiple-comparison-adjusted
+    threshold).
     """)
     return
 
 
 @app.cell(hide_code=True)
-def _(idata_fried, pmb):
-    pmb.plot_convergence(idata_fried, var_name="mu")
+def _(az, idata_fried):
+    az.plot_convergence_dist(idata_fried, var_names=["mu"])
     return
 
 
@@ -199,6 +200,7 @@ def _(RANDOM_SEED, X_fried, idata_fried, model_fried, pm):
         ppc_fried = pm.sample_posterior_predictive(
             idata_fried,
             var_names=["y"],
+            sample_vars=["mu"],
             random_seed=RANDOM_SEED,
         )
     return (ppc_fried,)
@@ -206,7 +208,27 @@ def _(RANDOM_SEED, X_fried, idata_fried, model_fried, pm):
 
 @app.cell(hide_code=True)
 def _(az, ppc_fried):
-    az.plot_ppc(ppc_fried, kind="cumulative", num_pp_samples=100)
+    az.plot_ppc_dist(ppc_fried, kind="ecdf", num_samples=100)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    The ECDF overlay tells us whether replicated draws cover the
+    observed marginal. A complementary check is calibration via
+    the **probability integral transform** (PIT): under a well
+    calibrated model the PIT values $p(\tilde y_i \le y_i \mid y)$
+    are uniform on $[0,1]$. `plot_ppc_pit` plots the Δ-ECDF of the
+    PIT values; perfect calibration is the flat line at zero, and
+    the shaded band is a simultaneous confidence envelope.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(az, ppc_fried):
+    az.plot_ppc_pit(ppc_fried)
     return
 
 
@@ -219,6 +241,7 @@ def _(RANDOM_SEED, X_fried_test, idata_fried, model_fried, pm):
         pp_fried = pm.sample_posterior_predictive(
             idata_fried,
             var_names=["mu"],
+            sample_vars=["mu"],
             predictions=True,
             random_seed=RANDOM_SEED,
         )
@@ -314,8 +337,8 @@ def _(RANDOM_SEED, X_fried, pm, pmb, y_fried):
                 tune=1000,
                 chains=4,
                 random_seed=RANDOM_SEED,
-                idata_kwargs={"log_likelihood": True},
             )
+            pm.compute_log_likelihood(idata)
         return idata
 
     return (fit_friedman,)
@@ -348,7 +371,7 @@ def _(az, idata_fried_m10, idata_fried_m200, idata_fried_m50, plt):
             "m=200": idata_fried_m200,
         }
     )
-    _ax = az.plot_compare(cmp_m, plot_ic_diff=False, insample_dev=False, legend=False)
+    _ax = az.plot_compare(cmp_m)
     plt.gcf().tight_layout()
     plt.gcf()
     return (cmp_m,)
@@ -537,8 +560,8 @@ def _(idata_f1, np, plt, y_train):
 
 
 @app.cell(hide_code=True)
-def _(idata_f1, pmb):
-    pmb.plot_convergence(idata_f1, var_name="mu")
+def _(az, idata_f1):
+    az.plot_convergence_dist(idata_f1, var_names=["mu"])
     return
 
 
@@ -557,6 +580,7 @@ def _(RANDOM_SEED, X_train, idata_f1, model_f1, pm):
         ppc_f1 = pm.sample_posterior_predictive(
             idata_f1,
             var_names=["y"],
+            sample_vars=["mu"],
             random_seed=RANDOM_SEED,
         )
     return (ppc_f1,)
@@ -564,7 +588,13 @@ def _(RANDOM_SEED, X_train, idata_f1, model_f1, pm):
 
 @app.cell(hide_code=True)
 def _(az, ppc_f1):
-    az.plot_ppc(ppc_f1, kind="cumulative", num_pp_samples=100)
+    az.plot_ppc_dist(ppc_f1, kind="ecdf", num_samples=100)
+    return
+
+
+@app.cell(hide_code=True)
+def _(az, ppc_f1):
+    az.plot_ppc_pit(ppc_f1)
     return
 
 
@@ -575,6 +605,7 @@ def _(RANDOM_SEED, X_test, idata_f1, model_f1, pm):
         pp_f1 = pm.sample_posterior_predictive(
             idata_f1,
             var_names=["mu"],
+            sample_vars=["mu"],
             predictions=True,
             random_seed=RANDOM_SEED,
         )
@@ -627,6 +658,324 @@ def _(X_train, model_f1, mu_f1, pm, pmb, y_train):
     with model_f1:
         pm.set_data({"X_data": X_train})
         pmb.plot_pdp(bartrv=mu_f1, X=X_train, Y=y_train)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Diagnosing the F1 fit
+
+    The PIT plot above says calibration is broken ($p \approx 0$):
+    the posterior predictive is over-dispersed and slightly biased.
+    The downstream heteroscedastic model will not rescue this on
+    its own — when the mean function is structurally wrong,
+    modelling $\sigma(x)$ just absorbs residual misfit.
+
+    Two plausible levers:
+
+    1. **Missing features.** The CSV has `driver`, `team`, and
+       `position` columns we have not used. Driver-to-driver gaps
+       in F1 are 0.3–0.8 s/lap and team-to-team gaps are several
+       seconds; without those, BART cannot tell a back marker apart
+       from a front runner.
+    2. **Tree capacity.** Defaults $\alpha=0.95$, $\beta=2.0$ keep
+       trees shallow (depth $\le 3$). Narrow regimes — slow
+       out-laps, back-of-grid drivers — may need depth 5–6.
+
+    Escalate one knob at a time and watch the PIT flatten.
+    """)
+    return
+
+
+@app.cell
+def _(RANDOM_SEED, f1_df, np, pl):
+    # Reuse the same f1_df loaded above, but expand the feature set
+    # to include driver, team, and position. Categorical columns are
+    # encoded as integer category codes for pmb.OneHotSplitRule (same
+    # pattern as the existing `compound` column).
+    num_cols_full = [
+        "tyre_life",
+        "lap_number",
+        "stint",
+        "position",
+        "air_temp",
+        "track_temp",
+        "humidity",
+        "wind_speed",
+    ]
+    cat_cols_full = ["driver", "team", "compound"]
+    n_numeric_full = len(num_cols_full)
+    f1_feature_names_full = list(num_cols_full) + list(cat_cols_full)
+
+    _X_num = f1_df.select(num_cols_full).to_numpy().astype(float)
+    _X_cat = np.column_stack(
+        [
+            f1_df[c].cast(pl.Categorical).to_physical().to_numpy().astype(float)
+            for c in cat_cols_full
+        ]
+    )
+    _X_full = np.concatenate([_X_num, _X_cat], axis=1)
+    _y_full = f1_df["lap_time_s"].to_numpy().astype(float)
+
+    _rng_full = np.random.default_rng(RANDOM_SEED)
+    _perm_full = _rng_full.permutation(_X_full.shape[0])
+    X_train_full = _X_full[_perm_full[:500]]
+    y_train_full = _y_full[_perm_full[:500]]
+    return X_train_full, n_numeric_full, y_train_full
+
+
+@app.cell
+def _(RANDOM_SEED, n_numeric_full, pm, pmb):
+    def fit_f1_homo(X, y, *, m=100, response="constant", alpha=0.95, beta=2.0):
+        rules = [pmb.ContinuousSplitRule] * n_numeric_full + [pmb.OneHotSplitRule] * 3
+        with pm.Model():
+            _Xd = pm.Data("X_data", X)
+            _mu = pmb.BART(
+                "mu",
+                X=_Xd,
+                Y=y,
+                m=m,
+                response=response,
+                alpha=alpha,
+                beta=beta,
+                split_rules=rules,
+            )
+            _sigma = pm.HalfNormal("sigma", float(y.std()))
+            pm.Normal("y", mu=_mu, sigma=_sigma, observed=y, shape=_mu.shape)
+            idata = pm.sample(
+                draws=1000,
+                tune=1000,
+                chains=4,
+                random_seed=RANDOM_SEED,
+            )
+            pm.sample_posterior_predictive(
+                idata,
+                var_names=["y"],
+                sample_vars=["mu"],
+                random_seed=RANDOM_SEED,
+                extend_inferencedata=True,
+            )
+        return idata
+
+    return (fit_f1_homo,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Fit 1 — add `driver`, `team`, `position` (defaults otherwise)
+    """)
+    return
+
+
+@app.cell
+def _(X_train_full, fit_f1_homo, y_train_full):
+    idata_f1_feat = fit_f1_homo(X_train_full, y_train_full)
+    return (idata_f1_feat,)
+
+
+@app.cell(hide_code=True)
+def _(az, idata_f1_feat):
+    az.plot_ppc_pit(idata_f1_feat)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Fit 2 — features + `response='linear'`
+    """)
+    return
+
+
+@app.cell
+def _(X_train_full, fit_f1_homo, y_train_full):
+    idata_f1_linear = fit_f1_homo(X_train_full, y_train_full, response="linear")
+    return (idata_f1_linear,)
+
+
+@app.cell(hide_code=True)
+def _(az, idata_f1_linear):
+    az.plot_ppc_pit(idata_f1_linear)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Fit 3 — features + linear leaves + $\beta=1.5$, $m=200$
+    """)
+    return
+
+
+@app.cell
+def _(X_train_full, fit_f1_homo, y_train_full):
+    idata_f1_deep = fit_f1_homo(
+        X_train_full, y_train_full, response="linear", beta=1.5, m=200
+    )
+    return (idata_f1_deep,)
+
+
+@app.cell(hide_code=True)
+def _(az, idata_f1_deep):
+    az.plot_ppc_pit(idata_f1_deep)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Fit 4 — Student-T likelihood (linear leaves, $\beta=1.5$, $m=200$)
+
+    σ̂ has come down meaningfully with more capacity, but the PIT
+    shape barely moves. That is the signature of a misspecified
+    *likelihood*, not a misspecified mean. F1 residuals retain a
+    right tail (the SC / lift / dirty-air laps that survive the
+    0.9–1.3 median filter in `pull_f1_laps.py`), and a symmetric
+    Gaussian likelihood cannot represent them at any $(\mu, \sigma)$
+    setting. Swap `pm.Normal` for `pm.StudentT` and let $\nu$ learn
+    the tail heaviness.
+    """)
+    return
+
+
+@app.cell
+def _(RANDOM_SEED, X_train_full, n_numeric_full, pm, pmb, y_train_full):
+    _rules_t = [pmb.ContinuousSplitRule] * n_numeric_full + [pmb.OneHotSplitRule] * 3
+    with pm.Model() as model_f1_t:
+        _Xd = pm.Data("X_data", X_train_full)
+        _mu = pmb.BART(
+            "mu",
+            X=_Xd,
+            Y=y_train_full,
+            m=200,
+            response="linear",
+            alpha=0.95,
+            beta=1.5,
+            split_rules=_rules_t,
+        )
+        _sigma = pm.HalfNormal("sigma", float(y_train_full.std()))
+        _nu = pm.Gamma("nu", alpha=2.0, beta=0.1)
+        pm.StudentT(
+            "y",
+            nu=_nu,
+            mu=_mu,
+            sigma=_sigma,
+            observed=y_train_full,
+            shape=_mu.shape,
+        )
+        idata_f1_t = pm.sample(
+            draws=1000,
+            tune=1000,
+            chains=4,
+            random_seed=RANDOM_SEED,
+        )
+        pm.sample_posterior_predictive(
+            idata_f1_t,
+            var_names=["y"],
+            sample_vars=["mu"],
+            random_seed=RANDOM_SEED,
+            extend_inferencedata=True,
+        )
+    return idata_f1_t, model_f1_t
+
+
+@app.cell(hide_code=True)
+def _(az, idata_f1_t):
+    az.plot_ppc_pit(idata_f1_t)
+    return
+
+
+@app.cell
+def _(RANDOM_SEED, X_test, idata_f1_t, model_f1_t, pm):
+    with model_f1_t:
+        pm.set_data({"X_data": X_test})
+        pp_f1_t = pm.sample_posterior_predictive(
+            idata_f1_t,
+            var_names=["mu"],
+            sample_vars=["mu"],
+            predictions=True,
+            random_seed=RANDOM_SEED,
+        )
+    return
+
+
+@app.cell
+def _(idata_f1_t, np, plt, y_test):
+    _mu_pred = idata_f1_t.predictions["mu"].stack(sample=("chain", "draw")).values
+    _f_mean = _mu_pred.mean(axis=1)
+    _f_lo, _f_hi = np.quantile(_mu_pred, [0.05, 0.95], axis=1)
+    _cov = ((_f_lo <= y_test) & (y_test <= _f_hi)).mean()
+
+    _fig, _ax = plt.subplots(figsize=(6.5, 4.5))
+    _order = np.argsort(y_test)
+    _ax.errorbar(
+        y_test[_order],
+        _f_mean[_order],
+        yerr=[(_f_mean - _f_lo)[_order], (_f_hi - _f_mean)[_order]],
+        fmt="o",
+        ms=3,
+        ecolor="#4c72b0",
+        color="#333",
+        alpha=0.55,
+        elinewidth=0.7,
+    )
+    _lim = (y_test.min() - 0.5, y_test.max() + 0.5)
+    _ax.plot(_lim, _lim, "--", color="C3", lw=1)
+    _ax.set_xlim(_lim)
+    _ax.set_ylim(_lim)
+    _ax.set_xlabel("observed lap time (s)")
+    _ax.set_ylabel(r"posterior mean $\hat f(x)$ with 90% HDI")
+    _ax.set_title(f"F1 out-of-sample coverage: {_cov:.0%}")
+    _fig.tight_layout()
+    _fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(az, idata_f1_deep, idata_f1_feat, idata_f1_linear, idata_f1_t, pl):
+    def _row(name, idata, with_nu=False):
+        _sig = float(idata.posterior["sigma"].mean().item())
+        _ndiv = int(idata.sample_stats["diverging"].sum().item())
+        _summary = az.summary(idata, var_names=["mu"], round_to=3)
+        _nu = round(float(idata.posterior["nu"].mean().item()), 1) if with_nu else None
+        return {
+            "variant": name,
+            "sigma_hat": round(_sig, 3),
+            "nu_hat": _nu,
+            "divergences": _ndiv,
+            "rhat_max": round(float(_summary["r_hat"].max()), 3),
+            "ess_min": int(_summary["ess_bulk"].min()),
+        }
+
+    pl.DataFrame(
+        [
+            _row("features only", idata_f1_feat),
+            _row("+ linear leaves", idata_f1_linear),
+            _row("+ linear, β=1.5, m=200", idata_f1_deep),
+            _row("+ Student-T", idata_f1_t, with_nu=True),
+        ]
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    Feature audit usually beats hyperparameter tuning: adding
+    `driver` and `team` does most of the work. `response='linear'`
+    extends the leaf model into the slow-lap tail, where constant
+    leaves struggle to extrapolate. Deepening the trees
+    ($\beta=1.5$, $m=200$) polishes residuals further but watch
+    for overfitting on $n=500$.
+
+    The heteroscedastic BART below deliberately keeps the original
+    feature set as the teaching baseline. The lesson cuts both
+    ways: when the mean is under-specified, $\sigma(x)$ absorbs
+    the misfit. Re-running it on `X_train_full` is left as an
+    exercise.
+    """)
     return
 
 
@@ -723,14 +1072,14 @@ def _(idata_het, np, plt, y_train):
 
 
 @app.cell(hide_code=True)
-def _(idata_het, pmb):
-    pmb.plot_convergence(idata_het, var_name="mu")
+def _(az, idata_het):
+    az.plot_convergence_dist(idata_het, var_names=["mu"])
     return
 
 
 @app.cell(hide_code=True)
-def _(idata_het, pmb):
-    pmb.plot_convergence(idata_het, var_name="log_sigma")
+def _(az, idata_het):
+    az.plot_convergence_dist(idata_het, var_names=["log_sigma"])
     return
 
 

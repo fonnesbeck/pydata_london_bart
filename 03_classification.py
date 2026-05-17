@@ -103,6 +103,7 @@ def _(RANDOM_SEED, X_cls_test, idata_cls, model_cls, pm):
         pp_cls = pm.sample_posterior_predictive(
             idata_cls,
             var_names=["p"],
+            sample_vars=["eta"],
             predictions=True,
             random_seed=RANDOM_SEED,
         )
@@ -171,11 +172,11 @@ def _(X_cls, eta, idata_cls, model_cls, pm, pmb):
 
 
 @app.cell(hide_code=True)
-def _(idata_cls, pmb):
+def _(az, idata_cls):
     # BART RVs need different convergence diagnostics than scalars:
-    # plot_convergence shows ECDFs of ESS and R-hat across every node
+    # plot_convergence_dist shows ECDFs of ESS and R-hat across every node
     # of the BART variable.
-    pmb.plot_convergence(idata_cls, var_name="eta")
+    az.plot_convergence_dist(idata_cls, var_names=["eta"])
     return
 
 
@@ -292,8 +293,8 @@ def _(X_ord, eta_sat, idata_sat, model_sat, pmb):
 
 
 @app.cell(hide_code=True)
-def _(idata_sat, pmb):
-    pmb.plot_convergence(idata_sat, var_name="eta")
+def _(az, idata_sat):
+    az.plot_convergence_dist(idata_sat, var_names=["eta"])
     return
 
 
