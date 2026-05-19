@@ -1,15 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = [
-#     "marimo",
-#     "pymc>=5.28",
-#     "pymc-bart>=0.11",
-#     "arviz>=0.23",
-#     "numpy>=2",
-#     "matplotlib>=3.10",
-# ]
-# ///
-
 import marimo
 
 __generated_with = "0.21.1"
@@ -84,6 +72,33 @@ def _(np, rng):
     return surv_X, surv_y
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        r"""
+        ## Configuring the PGBART step
+
+        `pm.sample` auto-registers `pmb.PGBART` as the step method for any
+        BART random variable in the model, but the sampler is configurable
+        when the defaults don't suit the problem. Two kwargs matter most:
+
+        - **`num_particles`** (default `10`): number of particles used in
+          the conditional sequential Monte Carlo proposal. More particles
+          give better proposals at higher per-step cost. The fit below
+          uses `num_particles=20`.
+        - **`batch`** (default `(0.1, 0.1)`): a `(tune_fraction,
+          post_tune_fraction)` pair giving the fraction of the `m` trees
+          refit per Gibbs sweep. Higher fractions move faster through tree
+          space but each step costs more. The fit below uses
+          `(0.1, 0.15)`, refitting slightly more trees once tuning ends.
+
+        The fit cell below passes both knobs through an explicit
+        `step=pmb.PGBART(vars=[eta], num_particles=20, batch=(0.1, 0.15))`.
+        """
+    )
+    return
+
+
 @app.cell
 def _(RANDOM_SEED, pm, pmb, surv_X, surv_y):
     # Discrete-time hazards modelled as repeated probit BART. The first
@@ -95,10 +110,8 @@ def _(RANDOM_SEED, pm, pmb, surv_X, surv_y):
         p = pm.Deterministic("p", pm.math.invprobit(eta))
         pm.Bernoulli("event", p=p, observed=surv_y, shape=p.shape)
         idata_surv = pm.sample(
-            draws=1000,
-            tune=1000,
-            chains=4,
             random_seed=RANDOM_SEED,
+            step=pmb.PGBART(vars=[eta], num_particles=20, batch=(0.1, 0.15)),
         )
     return eta, idata_surv, model_surv
 
@@ -198,6 +211,52 @@ def _(eta, model_surv, pm, pmb, surv_X, surv_y):
             X=surv_X,
             Y=surv_y.astype(float),
             var_discrete=[0],
+        )
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        r"""
+        ### From PDP to ICE: individual conditional expectations
+
+        The partial dependence plots above marginalize each covariate's
+        effect *across* the person-time rows: one curve per variable,
+        averaged over all individuals. That is the right view for a global
+        "does $x_1$ matter?" question, but it can hide heterogeneous
+        effects — exactly the regime where individualized risk matters,
+        which the README explicitly frames the survival section around.
+
+        **Individual conditional expectation (ICE)** plots address this
+        directly: one curve per *instance*, so when the effect of a
+        covariate varies across the population, you see a fan of curves
+        instead of a single average.
+
+        The DGP for this notebook makes the contrast concrete:
+        $$\operatorname{logit} h(t \mid x) = -3 + 0.7\, x_1 + 0.4\, x_2 \log t.$$
+        The $x_1$ effect is constant across individuals (parallel curves);
+        the $x_2$ effect is scaled by $\log t$, so individuals at later
+        times respond more strongly to $x_2$ than individuals at $t=1$ —
+        which on an ICE plot shows up as a spread of slopes that the PDP
+        average smooths out.
+        """
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(RANDOM_SEED, eta, model_surv, pm, pmb, surv_X, surv_y):
+    with model_surv:
+        pm.set_data({"X_data": surv_X})
+        pmb.plot_ice(
+            bartrv=eta,
+            X=surv_X,
+            Y=surv_y.astype(float),
+            var_discrete=[0],
+            instances=30,
+            centered=True,
+            random_seed=RANDOM_SEED,
         )
     return
 

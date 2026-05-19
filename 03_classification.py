@@ -1,16 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = [
-#     "marimo",
-#     "pymc>=5.28",
-#     "pymc-bart>=0.11",
-#     "arviz>=0.23",
-#     "numpy>=2",
-#     "matplotlib>=3.10",
-#     "polars>=1.0",
-# ]
-# ///
-
 import marimo
 
 __generated_with = "0.21.1"
@@ -87,12 +74,7 @@ def _(RANDOM_SEED, X_cls, pm, pmb, y_cls):
         eta = pmb.BART("eta", X=X_data, Y=y_cls.astype(float), m=100)
         p = pm.Deterministic("p", pm.math.invprobit(eta))
         pm.Bernoulli("y", p=p, observed=y_cls, shape=p.shape)
-        idata_cls = pm.sample(
-            draws=1000,
-            tune=1000,
-            chains=4,
-            random_seed=RANDOM_SEED,
-        )
+        idata_cls = pm.sample(random_seed=RANDOM_SEED)
     return eta, idata_cls, model_cls
 
 
@@ -172,6 +154,106 @@ def _(X_cls, eta, idata_cls, model_cls, pm, pmb):
 
 
 @app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        r"""
+        ### Backward variable importance and submodel agreement
+
+        `compute_variable_importance` has two ranking methods:
+
+        - `method="VI"` (the default, used above) ranks features by what
+          they *add* when included. This is a forward selection view built
+          from partial dependence variance.
+        - `method="backward"` ranks features by what is *lost* when each is
+          removed. This is a backward elimination view. The two rankings
+          usually agree on the top features but disagree in the long tail.
+
+        `pmb.plot_scatter_submodels` then visualises the agreement: each
+        panel plots the full-model predictions against a pruned submodel's
+        predictions. The submodels that hug the diagonal are the ones
+        whose feature subsets are sufficient. That is how you justify
+        stopping at $k$ features rather than carrying all $p$.
+        """
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(X_cls, eta, idata_cls, model_cls, pm, pmb):
+    with model_cls:
+        pm.set_data({"X_data": X_cls})
+        _vi_backward = pmb.compute_variable_importance(
+            idata_cls, eta, X_cls, method="backward"
+        )
+    pmb.plot_scatter_submodels(_vi_backward)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        r"""
+        ### Sparse splitting via `split_prior`
+
+        BART's default prior picks a splitting variable uniformly at random
+        from the $p$ available features. When most features are noise
+        (3-of-20 here), uniform sampling wastes tree capacity exploring
+        irrelevant directions. `split_prior` lets you bias that choice:
+        pass a length-$p$ array of positive weights, and each split draws
+        a variable with probability proportional to its weight. Higher
+        weight $\Rightarrow$ higher selection probability; the default is
+        uniform.
+
+        Below we upweight the truly relevant features
+        $\{X_0, X_1, X_2\}$ by a factor of 10, i.e. `split_prior =
+        np.array([10., 10., 10.] + [1.]*17)`. This is the Linero (2018)
+        sparse splitting prior, hand-tuned here for *demonstrating the
+        interface*. In practice you obtain the weights from domain
+        knowledge or from a first-pass inclusion analysis (and Linero's
+        full method places a Dirichlet prior on the weights and learns
+        them; see notebook 1's `run_bart_sparse` implementation).
+
+        We compare inclusion frequencies (how often each variable is
+        chosen as a splitting variable) between the uniform-prior fit
+        above and the sparse-prior fit, via `pmb.plot_variable_inclusion`.
+        """
+    )
+    return
+
+
+@app.cell
+def _(RANDOM_SEED, X_cls, np, pm, pmb, y_cls):
+    # Same model spec as model_cls, but with split_prior upweighting
+    # X_0..X_2 10x.
+    _split_prior = np.array([10.0, 10.0, 10.0] + [1.0] * 17)
+    with pm.Model() as model_cls_sp:
+        X_data_sp = pm.Data("X_data", X_cls)
+        eta_sp = pmb.BART(
+            "eta", X=X_data_sp, Y=y_cls.astype(float), m=100, split_prior=_split_prior
+        )
+        p_sp = pm.Deterministic("p", pm.math.invprobit(eta_sp))
+        pm.Bernoulli("y", p=p_sp, observed=y_cls, shape=p_sp.shape)
+        idata_cls_sp = pm.sample(random_seed=RANDOM_SEED)
+    return eta_sp, idata_cls_sp, model_cls_sp
+
+
+@app.cell(hide_code=True)
+def _(X_cls, idata_cls, idata_cls_sp, plt, pmb):
+    _fig, (_ax0, _ax1) = plt.subplots(1, 2, figsize=(13, 4.0), sharey=True)
+    pmb.plot_variable_inclusion(idata_cls, X_cls, ax=_ax0)
+    _ax0.set_title("Uniform split prior (baseline)")
+    pmb.plot_variable_inclusion(idata_cls_sp, X_cls, ax=_ax1)
+    _ax1.set_title(r"Sparse $split\_prior = [10,10,10,1,\ldots,1]$")
+    _fig.suptitle(
+        "Inclusion frequencies: sparse prior concentrates splits on $X_0..X_2$",
+        y=1.02,
+    )
+    _fig.tight_layout()
+    _fig
+    return
+
+
+@app.cell(hide_code=True)
 def _(az, idata_cls):
     # BART RVs need different convergence diagnostics than scalars:
     # plot_convergence_dist shows ECDFs of ESS and R-hat across every node
@@ -199,9 +281,10 @@ def _(mo):
 
         BART composes with any PyMC likelihood. Here we model job
         satisfaction (`satjob`, four ordered levels) as an ordered probit
-        whose latent score is BART. Predictors: age, four self-reported
-        anxiety/stress scales, and one-hot indicators for sex, degree,
-        race, and religion.
+        whose latent score is BART. Predictors: age, five self-reported
+        anxiety/stress/finance scales, and four unordered categoricals
+        (sex, degree, race, religion) kept as integer-coded columns so
+        the BART splitter can apply category-aware split rules to them.
 
         The cutpoints are estimated jointly with the trees: the first
         cutpoint is fixed at zero for identifiability; the remaining two
@@ -232,6 +315,13 @@ def _(Path, np, os, pl):
             "./data/gss_2022.csv, or clone the Koenigsberg_Bayes repo."
         )
 
+    def _integer_code(col):
+        # Map any 1-D array of category labels to contiguous integer
+        # codes 0..K-1. SubsetSplitRule operates on these integer codes
+        # directly; no need to one-hot expand.
+        _, codes = np.unique(col, return_inverse=True)
+        return codes.astype(float)
+
     _gss_raw = load_gss()
     _cont = ["age"]
     _ordinal = ["stress", "feelnerv", "worry", "anxiety", "finrela"]
@@ -241,20 +331,71 @@ def _(Path, np, os, pl):
     _df = _gss_raw.select(_cols).drop_nulls()
     y_ord = _df["satjob"].to_numpy().astype(int) - 1
 
-    _X_parts = [_df[_cont + _ordinal].to_numpy().astype(float)]
-    for _c in _categ:
-        _dummies = _df[_c].to_dummies(drop_first=True).to_numpy().astype(float)
-        _X_parts.append(_dummies)
-    X_ord = np.concatenate(_X_parts, axis=1)
+    # Keep age + ordinal scales as continuous; integer-code the unordered
+    # categoricals (sex, degree, race, relig) so SubsetSplitRule can act
+    # on them directly. n_cont = 6 (age + 5 ordinal columns treated as
+    # continuous).
+    _X_cont_ordinal = _df[_cont + _ordinal].to_numpy().astype(float)
+    _X_cat = np.column_stack([_integer_code(_df[c].to_numpy()) for c in _categ])
+    X_ord = np.concatenate([_X_cont_ordinal, _X_cat], axis=1)
+    n_cont = _X_cont_ordinal.shape[1]
 
-    f"n={len(y_ord)}, p={X_ord.shape[1]}, classes={np.bincount(y_ord).tolist()}"
-    return X_ord, y_ord
+    f"n={len(y_ord)}, p={X_ord.shape[1]}, n_continuous={n_cont}, classes={np.bincount(y_ord).tolist()}"
+    return X_ord, n_cont, y_ord
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        r"""
+        ### `SubsetSplitRule` for multi-level categoricals
+
+        BART's split rules are per-column. Three are bundled with
+        `pymc-bart`:
+
+        - `ContinuousSplitRule` (default): splits on $x_j \le c$ for some
+          cut value $c$. Correct for numeric or ordinal predictors.
+        - `OneHotSplitRule`: splits on $x_j = k$ for a single level $k$.
+          Correct for binary indicators (e.g. `sex`).
+        - `SubsetSplitRule`: splits on $x_j \in S$ for an arbitrary
+          subset $S \subset \{0, 1, \ldots, K-1\}$ of the $K$ levels.
+          Correct for unordered categoricals with $K > 2$ levels
+          (e.g. `degree`, `race`, `relig`).
+
+        Without `SubsetSplitRule`, a $K$-level unordered categorical
+        either has to be one-hot expanded (which inflates $p$ and forces
+        BART to chain $K-1$ binary splits across multiple depth levels to
+        recover a single subset split), or treated as continuous (which
+        imposes a spurious ordering). `SubsetSplitRule` does the right
+        thing in a single node.
+
+        Here `split_rules` is a length-$p$ list with one rule per column,
+        applied to the design matrix from the previous cell whose layout
+        is `[age, stress, feelnerv, worry, anxiety, finrela, sex,
+        degree, race, relig]`.
+        """
+    )
+    return
 
 
 @app.cell
-def _(RANDOM_SEED, X_ord, np, pm, pmb, y_ord):
+def _(RANDOM_SEED, X_ord, n_cont, np, pm, pmb, y_ord):
+    # 6 continuous (age + 5 ordinal scales), then OneHot for binary sex,
+    # then SubsetSplitRule for the three multi-level unordered
+    # categoricals (degree, race, relig).
+    _split_rules = (
+        [pmb.ContinuousSplitRule] * n_cont
+        + [pmb.OneHotSplitRule]
+        + [pmb.SubsetSplitRule] * 3
+    )
     with pm.Model() as model_sat:
-        eta_sat = pmb.BART("eta", X=X_ord, Y=y_ord.astype(float), m=100)
+        eta_sat = pmb.BART(
+            "eta",
+            X=X_ord,
+            Y=y_ord.astype(float),
+            m=100,
+            split_rules=_split_rules,
+        )
         gamma_free = pm.Normal(
             "gamma_free",
             mu=np.array([1.0, 2.0]),
@@ -269,12 +410,7 @@ def _(RANDOM_SEED, X_ord, np, pm, pmb, y_ord):
         pm.OrderedProbit(
             "y", eta=eta_sat, cutpoints=cutpoints, observed=y_ord, compute_p=False
         )
-        idata_sat = pm.sample(
-            draws=1000,
-            tune=1000,
-            chains=4,
-            random_seed=RANDOM_SEED,
-        )
+        idata_sat = pm.sample(random_seed=RANDOM_SEED)
     return eta_sat, idata_sat, model_sat
 
 

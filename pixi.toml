@@ -8,15 +8,15 @@ version = "0.1.0"
 [tasks]
 
 [dependencies]
-arviz-stats = ">=1.1.0,<2"
-arviz-plots = ">=1.1.0,<2"
-marimo = ">=0.23.5,<0.24"
-polars = ">=1.40.1,<2"
-fastf1 = ">=3.8.3,<4"
-pydantic-ai = ">=1.96.1,<2"
-mcp = ">=1.27.1,<2"
-pymc = ">=6.0.0,<7"
-arviz = ">=1.1.0,<2"
+arviz-stats = ">=1.1.0"
+arviz-plots = ">=1.1.0"
+marimo = ">=0.23.5"
+polars = ">=1.40.1"
+fastf1 = ">=3.8.3"
+pydantic-ai = ">=1.96.1"
+mcp = ">=1.27.1"
+pymc = ">=6.0.0"
+arviz = ">=1.1.0"
 
 [pypi-dependencies]
-pymc-bart = ">=0.12.0, <0.13"
+pymc-bart = ">=0.12.0"
