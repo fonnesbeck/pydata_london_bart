@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.21.1"
+__generated_with = "0.23.5"
 app = marimo.App(width="medium")
 
 
@@ -21,9 +21,9 @@ def _(mo):
 
         1. **Synthetic binary data** with known true probabilities — lets
            us check calibration directly.
-        2. **GSS 2022 ordinal outcome** — job satisfaction modelled with
-           an ordered probit, demonstrating that BART composes naturally
-           with PyMC's other likelihoods.
+        2. **GSS 2022 ordinal outcome** — life satisfaction modelled
+           with an ordered probit, demonstrating that BART composes
+           naturally with PyMC's other likelihoods.
         """
     )
     return
@@ -67,8 +67,12 @@ def _(np, rng):
 
 @app.cell
 def _(RANDOM_SEED, X_cls, pm, pmb, y_cls):
-    # Probit BART: BART output enters Bernoulli through invprobit. We wrap
-    # X in pm.Data so we can swap it for out-of-sample predictions.
+    # Probit BART: BART output enters Bernoulli through invprobit (the
+    # standard-normal CDF, which maps a real-valued BART score onto a
+    # probability in [0, 1]). Probit pairs naturally with BART's Gaussian
+    # leaf prior; logit would also work but introduces an extra scale
+    # parameter. We wrap X in pm.Data so we can swap it for out-of-sample
+    # predictions — see the "PyMC patterns for prediction" aside in 02.
     with pm.Model() as model_cls:
         X_data = pm.Data("X_data", X_cls)
         eta = pmb.BART("eta", X=X_data, Y=y_cls.astype(float), m=100)
@@ -168,11 +172,16 @@ def _(mo):
           removed. This is a backward elimination view. The two rankings
           usually agree on the top features but disagree in the long tail.
 
-        `pmb.plot_scatter_submodels` then visualises the agreement: each
-        panel plots the full-model predictions against a pruned submodel's
-        predictions. The submodels that hug the diagonal are the ones
-        whose feature subsets are sufficient. That is how you justify
-        stopping at $k$ features rather than carrying all $p$.
+        `pmb.plot_scatter_submodels` then visualises the agreement. A
+        **submodel** here is the full BART fit restricted to a prefix of
+        the importance ranking (the top-1 feature, then top-2, then
+        top-3, etc.). The grid below shows one panel per submodel; each
+        panel plots the submodel's predictions (x-axis) against the
+        full-model predictions (y-axis). Panels that hug the diagonal
+        mean the submodel's features are sufficient — adding the
+        remaining features wouldn't change predictions much. That's how
+        you justify stopping at $k$ features rather than carrying all
+        $p$.
         """
     )
     return
@@ -214,8 +223,12 @@ def _(mo):
         them; see notebook 1's `run_bart_sparse` implementation).
 
         We compare inclusion frequencies (how often each variable is
-        chosen as a splitting variable) between the uniform-prior fit
-        above and the sparse-prior fit, via `pmb.plot_variable_inclusion`.
+        chosen as a splitting variable, averaged over posterior trees)
+        between the uniform-prior fit above and the sparse-prior fit,
+        via `pmb.plot_variable_inclusion`. Inclusion frequency is the
+        raw counting statistic — distinct from the restricted-$R^2$
+        "variable importance" plot earlier, which weighs each feature
+        by how much it actually moves predictions.
         """
     )
     return
@@ -277,18 +290,26 @@ def _(idata_cls):
 def _(mo):
     mo.md(
         r"""
-        ## Ordinal outcome: GSS 2022 job satisfaction
+        ## Ordinal outcome: GSS 2022 life satisfaction
 
-        BART composes with any PyMC likelihood. Here we model job
-        satisfaction (`satjob`, four ordered levels) as an ordered probit
-        whose latent score is BART. Predictors: age, five self-reported
-        anxiety/stress/finance scales, and four unordered categoricals
-        (sex, degree, race, religion) kept as integer-coded columns so
-        the BART splitter can apply category-aware split rules to them.
+        BART composes with any PyMC likelihood. Here we model life
+        satisfaction (`lifenow`, originally 1–10) as an ordered probit
+        whose latent score is BART. Categories 1–3 are nearly empty
+        (≈20 obs combined), so we collapse 1–4 into a single "low"
+        bucket, giving **$K = 7$** categories: `<=4, 5, 6, 7, 8, 9, 10`.
+
+        Predictors: age, financial-relative-position scale, education,
+        and five self-reported mental-health/wellbeing scales (anxiety,
+        work-meaningfulness, stress, feeling-nervous, worry); plus sex
+        (binary), fulltime employment indicator (binary), race (multi-
+        level), and religion (grouped into 5 buckets — None, Protestant,
+        Catholic, Christian-other, Non-Christian + residual). **Twelve
+        features total.**
 
         The cutpoints are estimated jointly with the trees: the first
-        cutpoint is fixed at zero for identifiability; the remaining two
-        are constrained ordered.
+        cutpoint is fixed at zero for identifiability; the remaining
+        $K - 2 = 5$ are constrained ordered via
+        `pm.distributions.transforms.ordered`.
         """
     )
     return
@@ -315,33 +336,91 @@ def _(Path, np, os, pl):
             "./data/gss_2022.csv, or clone the Koenigsberg_Bayes repo."
         )
 
-    def _integer_code(col):
+    def _int_code(col):
         # Map any 1-D array of category labels to contiguous integer
-        # codes 0..K-1. SubsetSplitRule operates on these integer codes
-        # directly; no need to one-hot expand.
+        # codes 0..K-1. SubsetSplitRule operates on these directly.
         _, codes = np.unique(col, return_inverse=True)
         return codes.astype(float)
 
-    _gss_raw = load_gss()
-    _cont = ["age"]
-    _ordinal = ["stress", "feelnerv", "worry", "anxiety", "finrela"]
-    _categ = ["sex", "degree", "race", "relig"]
-    _cols = ["satjob"] + _cont + _ordinal + _categ
+    def _relig_group(raw):
+        # Collapse the GSS `relig` codes into 5 buckets so the SubsetSplitRule
+        # has interpretable levels: None=0 (reference), Protestant=1,
+        # Catholic=2, Christian-other={10,11,13}=3, Non-Christian={3,5,6,7,
+        # 8,9,12}=4. Anything else falls into a residual bucket=5.
+        out = np.full(raw.shape, 5, dtype=int)
+        out[raw == 4] = 0
+        out[raw == 1] = 1
+        out[raw == 2] = 2
+        out[np.isin(raw, [10, 11, 13])] = 3
+        out[np.isin(raw, [3, 5, 6, 7, 8, 9, 12])] = 4
+        return out.astype(float)
 
-    _df = _gss_raw.select(_cols).drop_nulls()
-    y_ord = _df["satjob"].to_numpy().astype(int) - 1
+    _kept_cols = [
+        "lifenow",
+        "age",
+        "finrela",
+        "degree",
+        "anxiety",
+        "wrkmeangfl",
+        "stress",
+        "feelnerv",
+        "worry",
+        "sex",
+        "wrkstat",
+        "race",
+        "relig",
+    ]
+    _gss = (
+        load_gss()
+        .select(_kept_cols)
+        .filter(pl.col("lifenow").is_between(1, 10))
+        .drop_nulls()
+    )
 
-    # Keep age + ordinal scales as continuous; integer-code the unordered
-    # categoricals (sex, degree, race, relig) so SubsetSplitRule can act
-    # on them directly. n_cont = 6 (age + 5 ordinal columns treated as
-    # continuous).
-    _X_cont_ordinal = _df[_cont + _ordinal].to_numpy().astype(float)
-    _X_cat = np.column_stack([_integer_code(_df[c].to_numpy()) for c in _categ])
-    X_ord = np.concatenate([_X_cont_ordinal, _X_cat], axis=1)
-    n_cont = _X_cont_ordinal.shape[1]
+    # Collapse lifenow 1-4 into a single low bucket -> 7 categories
+    # indexed 0..6 (categories 1-3 hold ~20 obs combined and would
+    # destabilise the ordered probit).
+    y_ord = np.clip(_gss["lifenow"].to_numpy().astype(int), 4, None) - 4
+    K_ord = 7
 
-    f"n={len(y_ord)}, p={X_ord.shape[1]}, n_continuous={n_cont}, classes={np.bincount(y_ord).tolist()}"
-    return X_ord, n_cont, y_ord
+    feature_names_ord = [
+        "age",
+        "finrela",
+        "degree",
+        "anxiety",
+        "wrkmeangfl",
+        "stress",
+        "feelnerv",
+        "worry",
+        "sex",
+        "fulltime",
+        "race",
+        "relig",
+    ]
+
+    # 8 continuous/ordinal columns (age + 7 ordinal scales treated as
+    # equal-interval), then 2 binary indicators (sex=female, fulltime
+    # = wrkstat==1), then 2 multi-level unordered categoricals
+    # (race integer-coded; relig grouped via _relig_group).
+    X_ord = np.column_stack(
+        [
+            _gss["age"].to_numpy().astype(float),
+            _gss["finrela"].to_numpy().astype(float),
+            _gss["degree"].to_numpy().astype(float),
+            _gss["anxiety"].to_numpy().astype(float),
+            _gss["wrkmeangfl"].to_numpy().astype(float),
+            _gss["stress"].to_numpy().astype(float),
+            _gss["feelnerv"].to_numpy().astype(float),
+            _gss["worry"].to_numpy().astype(float),
+            (_gss["sex"].to_numpy() == 2).astype(float),
+            (_gss["wrkstat"].to_numpy() == 1).astype(float),
+            _int_code(_gss["race"].to_numpy()),
+            _relig_group(_gss["relig"].to_numpy()),
+        ]
+    )
+
+    f"n={len(y_ord)}, p={X_ord.shape[1]}, K={K_ord}, classes={np.bincount(y_ord).tolist()}"
+    return K_ord, X_ord, feature_names_ord, y_ord
 
 
 @app.cell(hide_code=True)
@@ -371,25 +450,37 @@ def _(mo):
 
         Here `split_rules` is a length-$p$ list with one rule per column,
         applied to the design matrix from the previous cell whose layout
-        is `[age, stress, feelnerv, worry, anxiety, finrela, sex,
-        degree, race, relig]`.
+        is `[age, finrela, degree, anxiety, wrkmeangfl, stress, feelnerv,
+        worry, sex, fulltime, race, relig]` — 8 `ContinuousSplitRule`,
+        2 `OneHotSplitRule` (binary indicators), 2 `SubsetSplitRule`
+        (multi-level unordered).
+
+        The ordered-probit cutpoints below need an identifying constraint.
+        We fix $\gamma_0 = 0$ and place a Normal prior on $(\gamma_1,
+        \gamma_2)$ transformed by `pm.distributions.transforms.ordered`,
+        which reparameterises the pair onto the constrained simplex
+        $\gamma_1 < \gamma_2$. `initval` gives the chain a starting point
+        already inside the constraint (a non-ordered start would error
+        before the first NUTS step). `compute_p=False` tells PyMC not to
+        materialise the per-category probabilities at each draw — we only
+        need the cutpoints and the likelihood, and the probabilities are
+        cheap to recompute post-hoc.
         """
     )
     return
 
 
 @app.cell
-def _(RANDOM_SEED, X_ord, n_cont, np, pm, pmb, y_ord):
-    # 6 continuous (age + 5 ordinal scales), then OneHot for binary sex,
-    # then SubsetSplitRule for the three multi-level unordered
-    # categoricals (degree, race, relig).
+def _(K_ord, RANDOM_SEED, X_ord, np, pm, pmb, y_ord):
+    # 8 continuous/ordinal columns, then 2 binary OneHot (sex, fulltime),
+    # then 2 multi-level Subset (race, relig).
     _split_rules = (
-        [pmb.ContinuousSplitRule] * n_cont
-        + [pmb.OneHotSplitRule]
-        + [pmb.SubsetSplitRule] * 3
+        [pmb.ContinuousSplitRule] * 8
+        + [pmb.OneHotSplitRule] * 2
+        + [pmb.SubsetSplitRule] * 2
     )
-    with pm.Model() as model_sat:
-        eta_sat = pmb.BART(
+    with pm.Model() as model_ord:
+        eta_ord = pmb.BART(
             "eta",
             X=X_ord,
             Y=y_ord.astype(float),
@@ -398,47 +489,144 @@ def _(RANDOM_SEED, X_ord, n_cont, np, pm, pmb, y_ord):
         )
         gamma_free = pm.Normal(
             "gamma_free",
-            mu=np.array([1.0, 2.0]),
+            mu=np.arange(1, K_ord - 1, dtype=float),
             sigma=1.0,
-            size=2,
+            size=K_ord - 2,
             transform=pm.distributions.transforms.ordered,
-            initval=np.array([1.0, 2.0]),
+            initval=np.arange(1, K_ord - 1, dtype=float),
         )
         cutpoints = pm.Deterministic(
             "cutpoints", pm.math.concatenate([[0.0], gamma_free])
         )
         pm.OrderedProbit(
-            "y", eta=eta_sat, cutpoints=cutpoints, observed=y_ord, compute_p=False
+            "y", eta=eta_ord, cutpoints=cutpoints, observed=y_ord, compute_p=False
         )
-        idata_sat = pm.sample(random_seed=RANDOM_SEED)
-    return eta_sat, idata_sat, model_sat
+        # target_accept=0.95: ordered-probit + BART geometry has funnel-
+        # like ridges; the higher target keeps divergences down.
+        idata_ord = pm.sample(random_seed=RANDOM_SEED, target_accept=0.95)
+    return eta_ord, idata_ord, model_ord
 
 
 @app.cell
-def _(az, idata_sat):
-    az.summary(idata_sat, var_names=["gamma_free", "cutpoints"], round_to=3)
+def _(az, idata_ord):
+    az.summary(idata_ord, var_names=["gamma_free", "cutpoints"], round_to=3)
     return
 
 
 @app.cell(hide_code=True)
-def _(X_ord, eta_sat, idata_sat, model_sat, pmb):
-    with model_sat:
-        _vi_sat = pmb.compute_variable_importance(idata_sat, eta_sat, X_ord)
-    pmb.plot_variable_importance(_vi_sat)
+def _(X_ord, eta_ord, feature_names_ord, idata_ord, model_ord, pmb):
+    with model_ord:
+        _vi_ord = pmb.compute_variable_importance(idata_ord, eta_ord, X_ord)
+    pmb.plot_variable_importance(_vi_ord, labels=feature_names_ord)
     return
 
 
 @app.cell(hide_code=True)
-def _(az, idata_sat):
-    az.plot_convergence_dist(idata_sat, var_names=["eta"])
+def _(az, idata_ord):
+    az.plot_convergence_dist(idata_ord, var_names=["eta"])
     return
 
 
 @app.cell
-def _(az, idata_sat):
-    _n_div = int(idata_sat.sample_stats["diverging"].sum())
-    _summary = az.summary(idata_sat, var_names=["gamma_free"], round_to=3)
+def _(az, idata_ord):
+    _n_div = int(idata_ord.sample_stats["diverging"].sum())
+    _summary = az.summary(idata_ord, var_names=["gamma_free"], round_to=3)
     f"divergences: {_n_div}   |   gamma_free max R-hat = {_summary['r_hat'].max():.3f}, min ESS = {_summary['ess_bulk'].min():.0f}"
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        r"""
+        ### Posterior predictive check
+
+        Sample `y` draws from the fitted ordered probit and compare the
+        per-category counts to the observed histogram. If the model
+        captures the marginal distribution the observed counts (red dots)
+        sit inside the 90% predictive band (blue error bars).
+        """
+    )
+    return
+
+
+@app.cell
+def _(RANDOM_SEED, idata_ord, model_ord, pm):
+    with model_ord:
+        ppc_ord = pm.sample_posterior_predictive(
+            idata_ord,
+            var_names=["y"],
+            sample_vars=["eta"],
+            random_seed=RANDOM_SEED,
+        )
+    return (ppc_ord,)
+
+
+@app.cell(hide_code=True)
+def _(K_ord, np, plt, ppc_ord, y_ord):
+    _y_rep = ppc_ord.posterior_predictive["y"].values.reshape(-1, len(y_ord))
+    _obs = np.bincount(y_ord, minlength=K_ord)
+    _rep = np.stack([np.bincount(row, minlength=K_ord) for row in _y_rep], axis=0)
+    _mean = _rep.mean(axis=0)
+    _lo, _hi = np.quantile(_rep, [0.05, 0.95], axis=0)
+
+    _fig, _ax = plt.subplots(figsize=(7.5, 4.0))
+    _pos = np.arange(K_ord)
+    _ax.errorbar(
+        _pos,
+        _mean,
+        yerr=[_mean - _lo, _hi - _mean],
+        fmt="none",
+        ecolor="#4c72b0",
+        elinewidth=1.5,
+        capsize=4,
+        label="posterior predictive (90% band)",
+    )
+    _ax.scatter(_pos, _obs, color="C3", zorder=3, label="observed")
+    _ax.set_xticks(_pos)
+    _ax.set_xticklabels(["<=4", "5", "6", "7", "8", "9", "10"])
+    _ax.set_xlabel("lifenow category (after collapse)")
+    _ax.set_ylabel("count")
+    _ax.set_title("PPC: category counts")
+    _ax.legend()
+    _fig.tight_layout()
+    _fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        r"""
+        ### Partial dependence
+
+        PDP for the five continuous/ordinal predictors (age and four
+        wellbeing scales). The y-axis is the latent $\eta$ (probit
+        scale), not a probability — interpret signs and relative
+        magnitudes, not absolute levels. `pmb.plot_pdp` reads feature
+        names from a duck-typed DataFrame's `.columns`, so we pass a
+        polars `DataFrame` view of `X_ord`.
+        """
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(X_ord, eta_ord, feature_names_ord, pl, pmb):
+    _X_df = pl.DataFrame(X_ord, schema=feature_names_ord)
+    _axes = pmb.plot_pdp(
+        eta_ord,
+        X=_X_df,
+        Y=None,
+        xs_interval="quantiles",
+        var_idx=[0, 1, 2, 3, 4],
+        var_discrete=[1, 2, 3, 4],
+        figsize=(12, 6.5),
+        sharey=True,
+        color="C0",
+    )
+    _axes[0].figure.tight_layout()
+    _axes[0].figure
     return
 
 

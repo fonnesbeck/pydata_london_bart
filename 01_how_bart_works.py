@@ -740,6 +740,10 @@ def _(mo):
     next section integrate $\mu$ out entirely when scoring tree structures.
     That move is the trick that keeps MH from having to do reversible jump
     over leaf dimensions.
+
+    The conjugate update is implemented in `draw_leaf_values` below
+    (hidden by default — expand to read). `run_bart` calls it once per
+    tree per sweep, after the structure move accepts.
     """)
     return
 
@@ -913,6 +917,7 @@ class Tree:
         self.mu = [0.0]
 
     def copy(self):
+        # bypass __init__ to clone an existing tree's node arrays in place
         t = Tree.__new__(Tree)
         t.split_var = list(self.split_var)
         t.split_val = list(self.split_val)
@@ -1044,6 +1049,7 @@ def _(np):
 
     def compact(tree):
         """Rebuild the tree dropping unreachable nodes, renumbering indices."""
+        # bypass __init__ — we're rebuilding the node arrays from scratch
         new = Tree.__new__(Tree)
         new.split_var = []
         new.split_val = []
@@ -1264,6 +1270,20 @@ def _(mo):
     function body is hidden by default but you can expand the cell to see
     the loop. The figure below is a calibration check on the Friedman DGP,
     where the true $f$ and the true $\sigma = 1$ are both known.
+
+    A few `run_bart` hyperparameters worth naming explicitly (they appear
+    in the signature but not in the algorithm text above):
+
+    * **`k`** — leaf-value shrinkage. Each leaf's prior SD is set so that
+      $\pm k$ standard deviations of the prior cover roughly the
+      observed range of $y$ around $\bar y$. Larger $k$ → tighter
+      per-leaf prior → smaller per-tree contribution.
+    * **`nu`, `q`** — the inverse-$\chi^2$ prior on $\sigma^2$ is
+      calibrated by setting the prior $q$-th quantile equal to a rough
+      preliminary estimate of $\sigma$ (e.g. residual SD of an OLS fit).
+      `nu` controls how informative that prior is.
+    * **`thin`** — post-hoc subsampling of saved draws. Reduces memory
+      / storage but does not change the chain itself.
     """)
     return
 
@@ -1330,6 +1350,8 @@ def _(
         accept_stats = {"grow": [0, 0], "prune": [0, 0]}
         kept = 0
 
+        # mo.status.progress_bar is marimo's iteration progress widget — not a
+        # sampler dependency; swap for tqdm or range() outside marimo
         for it in mo.status.progress_bar(range(n_iter), title="MH-BART sampling"):
             for j in range(m):
                 Rj = y_scaled - tree_preds.sum(axis=0) + tree_preds[j]
@@ -1504,8 +1526,8 @@ def _(mo):
       σ posterior, in-sample coverage, and out-of-sample MSE on the
       Friedman DGP — three quantities that move together as $m$ grows.
 
-    The cell below is **disabled by default** (it refits BART three times).
-    Toggle the cell on to run the comparison.
+    The cells below refit BART at three values of $m$ on the Friedman DGP;
+    the comparison plot summarises the three quantities together.
     """)
     return
 

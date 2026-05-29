@@ -1,3 +1,17 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "marimo",
+#     "pymc>=5.28",
+#     "pymc-bart>=0.11",
+#     "arviz>=0.23",
+#     "numpy>=2",
+#     "matplotlib>=3.10",
+#     "polars>=1.0",
+#     "fastf1>=3.8",
+# ]
+# ///
+
 import marimo
 
 __generated_with = "0.23.5"
@@ -151,6 +165,26 @@ def _(RANDOM_SEED, f1_df, np):
     )
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### The baseline model
+
+    A BART regression in pymc-bart is a one-liner inside a PyMC model
+    context. `pmb.BART(name, X, Y, m, ...)` declares the BART random
+    variable; we wrap it in a `pm.Normal` likelihood with a `pm.HalfNormal`
+    prior on residual SD.
+
+    One subtlety worth flagging: $Y$ is passed **twice** below - once to
+    `pmb.BART(..., Y=y_train)` and once to `pm.Normal(..., observed=y_train)`.
+    These play different roles. The BART RV uses $Y$ to calibrate the
+    leaf-value prior (centred at $\bar y$, scale tied to $\text{sd}(Y)$).
+    The likelihood uses `observed` to compute the data fit. Same array, two
+    purposes.
+    """)
+    return
+
+
 @app.cell
 def _(RANDOM_SEED, X_train, n_num_f1, pm, pmb, y_train):
     f1_split_rules = (
@@ -211,6 +245,23 @@ def _(idata_f1, np, plt, y_train):
 
 
 @app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Convergence diagnostics for a BART RV
+
+    `mu` is a length-$n$ random variable, so `az.plot_trace` would produce a
+    wall of densities. `az.plot_convergence_dist` summarises across all `mu`
+    components instead: the empirical CDF of effective sample size (left)
+    and of $\hat R$ (right). Dashed lines mark the rules-of-thumb (ESS
+    $\ge 400$ per parameter; $\hat R$ below a multiple-comparison-adjusted
+    threshold). A curve well to the right of the ESS line and well to the
+    left of the $\hat R$ line means the chains are mixing well across every
+    node of the BART RV.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
 def _(az, idata_f1):
     az.plot_convergence_dist(idata_f1, var_names=["mu"])
     return
@@ -238,14 +289,83 @@ def _(RANDOM_SEED, X_train, idata_f1, model_f1, pm):
 
 
 @app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Posterior predictive check
+
+    Sample draws of $y$ from the fitted posterior and overlay them on the
+    observed data as ECDFs. The dark line is the observed CDF; the light
+    band is a cloud of posterior-predictive CDFs (`num_samples=100`
+    replicates here). If the model captures the data-generating process the
+    observed line sits inside the cloud. Systematic departures - observed
+    mass in the tails the band doesn't reach - signal structural under-fit
+    or over/under-dispersion.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
 def _(az, ppc_f1):
     az.plot_ppc_dist(ppc_f1, kind="ecdf", num_samples=100)
     return
 
 
 @app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Calibration via the probability integral transform (PIT)
+
+    The ECDF overlay tells us whether replicated draws cover the observed
+    marginal. A complementary check is calibration: under a well-calibrated
+    model the values $p(\tilde y_i \le y_i \mid y)$ are uniform on
+    $[0, 1]$. `plot_ppc_pit` plots the $\Delta$-ECDF of the PIT values;
+    perfect calibration is the flat line at zero, and the shaded band is a
+    simultaneous confidence envelope. A curve bowing **above** the band
+    means the model is overdispersed; bowing **below** means
+    underdispersed; a strong slope means biased.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
 def _(az, ppc_f1):
     az.plot_ppc_pit(ppc_f1)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### PyMC patterns for prediction
+
+    A few PyMC mechanics that appear repeatedly below and across the next
+    three notebooks:
+
+    - **`pm.Data` and `pm.set_data`.** Wrapping $X$ in
+      `pm.Data("X_data", X)` makes the design matrix a *swappable* runtime
+      input. Before predicting at new inputs we call
+      `pm.set_data({"X_data": X_new})` and re-evaluate the model on the new
+      $X$ - no rebuild, the trained trees are reused.
+
+    - **`sample_vars=["mu"]`.** Tells `pm.sample_posterior_predictive`
+      which random variable to walk during prediction. `pmb.BART` requires
+      this; omitting it can silently return the prior mean instead of using
+      the posterior trees.
+
+    - **`predictions=True`.** New draws land in `idata.predictions` rather
+      than `idata.posterior_predictive`. Keeps in-sample posterior
+      predictive checks and out-of-sample forecasts in separate namespaces
+      on the same trace object.
+
+    - **`extend_inferencedata=True`.** Merges the new PPC draws into the
+      existing trace. We use it below on the Student-T fit so
+      `az.plot_ppc_pit` finds `posterior_predictive` on the same trace.
+
+    - **`pm.compute_log_likelihood(idata)`.** PyMC 6 dropped the
+      `idata_kwargs={"log_likelihood": True}` shortcut on `pm.sample`. Call
+      this once after sampling whenever you need pointwise log-likelihoods,
+      which `az.compare` requires for LOO-CV.
+    """)
     return
 
 
@@ -294,11 +414,40 @@ def _(np, plt, pp_f1, y_test):
 
 
 @app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Variable importance
+
+    `pmb.compute_variable_importance` ranks features by adding them one at
+    a time in order of **inclusion frequency** (how often each appears as a
+    splitting variable across the posterior trees) and measuring how the
+    restricted model's $R^2$ recovers the full-model fit. The plot below
+    shows $R^2$ vs the number of variables retained; the curve plateaus at
+    the smallest sufficient subset, which is your defensible feature
+    selection.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
 def _(X_train, f1_feature_names, idata_f1, model_f1, mu_f1, pm, pmb):
     with model_f1:
         pm.set_data({"X_data": X_train})
         _vi_f1 = pmb.compute_variable_importance(idata_f1, mu_f1, X_train)
     pmb.plot_variable_importance(_vi_f1, labels=f1_feature_names)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Partial dependence
+
+    `pmb.plot_pdp` shows the marginal effect of each covariate, integrating
+    the other features out over their empirical distribution. See notebook
+    01's "Partial dependence and ICE" section for the from-scratch
+    derivation; here it's a one-liner against the fitted BART RV.
+    """)
     return
 
 
@@ -317,9 +466,9 @@ def _(mo):
 
     The PIT plot above says calibration is broken ($p \approx 0$):
     the posterior predictive is over-dispersed and slightly biased.
-    The downstream heteroscedastic model will not rescue this on
-    its own - when the mean function is structurally wrong,
-    modelling $\sigma(x)$ just absorbs residual misfit.
+    Modelling $\sigma(x)$ separately wouldn't rescue this on its own;
+    when the mean function is structurally wrong, $\sigma$ just
+    absorbs residual misfit.
 
     During development we escalated four levers one at a time and
     watched the PIT flatten:
@@ -522,20 +671,14 @@ def _(az, idata_f1, idata_f1_t, pl):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    Feature audit usually beats hyperparameter tuning: adding
-    `driver` and `team` does most of the work. `response='linear'`
-    extends the leaf model into the slow-lap tail, where constant
-    leaves struggle to extrapolate. Deepening the trees
-    ($\beta=1.5$, $m=200$) polishes residuals further; with
-    $n \approx 4{,}150$ training laps across the 5 venues the model
-    has enough signal to support the deeper ensemble.
-
-    The heteroscedastic BART below uses the **baseline** feature set
-    (7 numeric + `compound` + `venue`) as the teaching contrast. The
-    lesson cuts both ways: when the mean is under-specified,
-    $\sigma(x)$ absorbs the misfit. Re-running it on the expanded
-    feature set is left as an exercise.
+    Feature audit usually beats hyperparameter tuning: adding `driver` and
+    `team` does most of the work. `response='linear'` extends the leaf
+    model into the slow-lap tail, where constant leaves struggle to
+    extrapolate. Deepening the trees ($\beta=1.5$, $m=200$) polishes
+    residuals further; with $n \approx 4{,}150$ training laps across the
+    5 venues the model has enough signal to support the deeper ensemble.
     """)
+
     return
 
 
@@ -544,19 +687,27 @@ def _(mo):
     mo.md(r"""
     ## Choosing the number of trees with PSIS-LOO-CV
 
-    `m` is BART's main knob: how many trees vote on the prediction.
-    The Quiroga et al. paper recommends comparing fits at a few
-    values of `m` using PSIS-LOO-CV [Vehtari et al., 2017] via
-    `az.compare`. ELPD typically increases with `m` then plateaus;
-    differences of $\le 4$ are not considered meaningful, so the
-    smallest `m` whose ELPD is statistically indistinguishable from
-    the largest is a defensible choice.
+    `m` is BART's main knob: how many trees vote on the prediction. The
+    Quiroga et al. paper recommends comparing fits at a few values of `m`
+    using PSIS-LOO-CV [Vehtari et al., 2017] via `az.compare`. ELPD
+    typically increases with `m` then plateaus; the smallest `m` whose
+    ELPD is statistically indistinguishable from the largest is a
+    defensible choice.
 
-    Below we refit the **baseline** F1 model (Normal likelihood,
-    9 features) at $m \in \{10, 50, 200\}$. Keeping the likelihood
-    and feature set fixed isolates the `m` lever from the Student-T
-    escalation above; the LOO numbers are directly comparable.
+    Below we refit the **baseline** F1 model (Normal likelihood, 9
+    features) at $m \in \{10, 50, 200\}$. Keeping the likelihood and
+    feature set fixed isolates the `m` lever from the Student-T escalation
+    above; the LOO numbers are directly comparable.
+
+    **How to read `az.compare`:** rows are sorted by `elpd` (higher is
+    better - expected log-pointwise-predictive density on held-out data,
+    estimated by PSIS-LOO by default in ArviZ 1.x). `dse` is the standard
+    error of the difference to the top model; differences within a few
+    `dse` are not meaningfully distinguishable. `weight` is a stacking
+    weight (how much to trust each fit in a model average). Pick the
+    smallest `m` whose ELPD is within a few `dse` of the largest.
     """)
+
     return
 
 
