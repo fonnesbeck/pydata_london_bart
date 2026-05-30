@@ -58,7 +58,6 @@ def _():
     import pymc_bart as pmb
 
     RANDOM_SEED = 20260608
-    rng = np.random.default_rng(RANDOM_SEED)
     return RANDOM_SEED, az, np, pl, plt, pm, pmb
 
 
@@ -352,8 +351,8 @@ def _(mo):
       this; omitting it can silently return the prior mean instead of using
       the posterior trees.
 
-    - **`predictions=True`.** New draws land in `idata.predictions` rather
-      than `idata.posterior_predictive`. Keeps in-sample posterior
+    - **`predictions=True`.** New draws land in `idata["predictions"]` rather
+      than `idata["posterior_predictive"]`. Keeps in-sample posterior
       predictive checks and out-of-sample forecasts in separate namespaces
       on the same trace object.
 
@@ -514,7 +513,6 @@ def _(f1_df, np, pl, test_idx, train_idx):
     ]
     cat_cols_full = ["driver", "team", "compound", "venue"]
     n_numeric_full = len(num_cols_full)
-    f1_feature_names_full = list(num_cols_full) + list(cat_cols_full)
 
     _X_num = f1_df.select(num_cols_full).to_numpy().astype(float)
     _X_cat = np.column_stack(
@@ -646,10 +644,10 @@ def _(np, plt, pp_f1_t, y_test_full):
 @app.cell(hide_code=True)
 def _(az, idata_f1, idata_f1_t, pl):
     def _row(name, idata, with_nu=False):
-        _sig = float(idata.posterior["sigma"].mean().item())
-        _ndiv = int(idata.sample_stats["diverging"].sum().item())
+        _sig = float(idata["posterior"]["sigma"].mean().item())
+        _ndiv = int(idata["sample_stats"]["diverging"].sum().item())
         _summary = az.summary(idata, var_names=["mu"], round_to=3)
-        _nu = round(float(idata.posterior["nu"].mean().item()), 1) if with_nu else None
+        _nu = round(float(idata["posterior"]["nu"].mean().item()), 1) if with_nu else None
         return {
             "variant": name,
             "sigma_hat": round(_sig, 3),
@@ -714,7 +712,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(RANDOM_SEED, X_train, f1_split_rules, pm, pmb, y_train):
     def fit_f1_m(m):
-        with pm.Model() as model_m:
+        with pm.Model():
             X_data_m = pm.Data("X_data", X_train)
             mu_m = pmb.BART(
                 "mu", X=X_data_m, Y=y_train, m=m, split_rules=f1_split_rules
@@ -790,7 +788,7 @@ def _(idata_f1_m10, idata_f1_m200, idata_f1_m50, plt):
         ("m=50", idata_f1_m50, "#dd8452"),
         ("m=200", idata_f1_m200, "#55a868"),
     ]:
-        _s = _idata.posterior["sigma"].values.ravel()
+        _s = _idata["posterior"]["sigma"].values.ravel()
         _ax.hist(
             _s,
             bins=40,

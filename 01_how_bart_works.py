@@ -16,6 +16,22 @@ def _():
 
 
 @app.cell(hide_code=True)
+def _():
+    # Shared colour scheme for every figure in this notebook. Define once here and
+    # reference these names instead of hand-picking hex codes per plot.
+    PALETTE = {
+        "obs": "#4c4c4c",        # observed data points
+        "truth": "#c44e52",      # the true function f(x)
+        "posterior": "#4c72b0",  # BART posterior mean / draws / credible band
+        "accent": "#dd8452",     # a secondary model (e.g. gradient boosting)
+        "muted": "#b0b0b0",      # de-emphasised series
+    }
+    # Colourblind-friendly categorical cycle for grouped series (m-sweeps, etc.).
+    CYCLE = ["#4c72b0", "#dd8452", "#55a868", "#c44e52", "#8172b3", "#937860"]
+    return (PALETTE,)
+
+
+@app.cell(hide_code=True)
 def _(np):
 
     def _make_1d_toy():
@@ -41,16 +57,17 @@ def _(mo):
 
     BART sits between two tree-based models you probably already use.
 
-    **Structurally**, BART is an additive model like XGBoost: the prediction is
-    the sum of many small trees. **Behaviourally**, BART trees act more like a
-    Random Forest: every tree is a weak learner contributing a small piece of
-    the overall fit, and the ensemble reaches a consensus through their sum.
-    Two important differences:
+    **Structurally**, BART is an additive model like **gradient-boosted trees**
+    (the method behind libraries such as XGBoost, LightGBM, and CatBoost): the
+    prediction is the sum of many small trees. **Behaviourally**, BART trees act
+    more like a **random forest**: every tree is a weak learner contributing a
+    small piece of the overall fit, and the ensemble reaches a consensus through
+    their sum. Two important differences:
 
-    * XGBoost fits trees sequentially with gradient descent. BART fits them
-      *simultaneously*: every tree is refreshed by a Metropolis-Hastings move
-      on every sweep through the data.
-    * Random Forests force weakness through bagging (row / column subsampling).
+    * Gradient boosting fits trees sequentially with gradient descent. BART fits
+      them *simultaneously*: every tree is refreshed by a Metropolis-Hastings
+      move on every sweep through the data.
+    * Random forests force weakness through bagging (row / column subsampling).
       BART forces weakness through a Bayesian **prior** that pulls every tree
       toward shallow shapes and small leaf values.
 
@@ -62,8 +79,67 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(buildup, mo, plt):
+def _(mo):
+    mo.md(r"""
+    ## Start with a familiar model
 
+    To see what BART adds, start with a model you already know. The plot below
+    is plain **gradient boosting** — `sklearn.ensemble.GradientBoostingRegressor`
+    with default settings — on a small example: 80 noisy observations (grey
+    points) scattered around a true function (red curve) that has a step near
+    $x = 0.4$ and a sharp hump near $x = 0.75$. The summed trees track both
+    features closely; it is a fast, accurate point predictor. But what it
+    returns is a single curve and nothing else — no measure of uncertainty, and
+    the fit looks equally committed where the data is dense and where it is
+    sparse. Keep this picture in mind: next we fit the *same* data with BART,
+    which keeps the sum-of-trees structure but adds a full posterior.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(gbm_demo, mo, plt):
+    def _gbm_demo_fig():
+        if gbm_demo is None:
+            return mo.md("*Compute cell hasn't finished yet.*")
+        x = gbm_demo["x_train"]
+        y = gbm_demo["y_train"]
+        xg = gbm_demo["x_grid"]
+        f_true = gbm_demo["f_true"]
+        f_pred = gbm_demo["f_pred"]
+
+        fig, ax = plt.subplots(figsize=(7, 3.6))
+        ax.scatter(x, y, s=18, alpha=0.7, color="#333", label="observations")
+        ax.plot(xg, f_true, color="#c44e52", lw=1.6, label=r"true $f(x)$")
+        ax.plot(xg, f_pred, color="#55a868", lw=2.0, label="gradient-boosting prediction")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_title("Gradient Boosting")
+        ax.legend(frameon=False, loc="upper left")
+        fig.tight_layout()
+        return fig
+
+
+    _gbm_demo_fig()
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    Now the same data, fit with BART. The scatter and the red true function
+    $f(x)$ are as before; what is new is the blue **posterior-mean** prediction
+    and the shaded **90% credible band** around it. Unlike the gradient-boosting
+    fit above, BART does not commit to a single curve — the band widens where
+    the data is sparser, which is exactly what a calibrated model should do.
+    By the end of this notebook you will have written every line of the BART
+    sampler in pure NumPy.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(buildup, mo, plt):
     def _section0_headline():
         if buildup is None:
             return mo.md("*Compute cell hasn't finished yet.*")
@@ -87,26 +163,13 @@ def _(buildup, mo, plt):
         )
         ax.set_xlabel("x")
         ax.set_ylabel("y")
-        ax.set_title("A BART fit (m=100 trees) on a 1D toy DGP")
+        ax.set_title("BART")
         ax.legend(frameon=False, loc="upper left")
         fig.tight_layout()
         return fig
 
+
     _section0_headline()
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    The figure above shows four things: the **scatter** is the data we
-    observed, the **red curve** is the (cheating) true function $f(x)$ we are
-    pretending not to know, the **blue curve** is BART's posterior-mean
-    prediction, and the **shaded band** is the 90% credible interval around
-    that prediction. The band widens where the data is sparser, which is
-    exactly what an honest model should do. By the end of this notebook you
-    will have written every line of the BART sampler in pure NumPy.
-    """)
     return
 
 
@@ -339,10 +402,20 @@ def _(mo):
     Prediction is just routing: walk down from the root following the splits
     until you reach a leaf, then return its $\mu$.
 
-    Internally the tree is six parallel arrays — `split_var`, `split_val`,
-    `left`, `right`, `parent`, `mu` — indexed by node id 0..N-1. A leaf is any
-    node whose `split_var` is $-1$. This representation is tedious to read but
-    cheap to copy, which the sampler does on every proposed move.
+    The implementation below stores the tree as six parallel arrays indexed by
+    node id $i = 0, \dots, N-1$:
+
+    | Array | Meaning |
+    |-------|---------|
+    | `split_var[i]` | $-1$ if node $i$ is a leaf, otherwise the column index to split on |
+    | `split_val[i]` | Cut threshold (used only when `split_var[i] \ge 0`) |
+    | `left[i]`, `right[i]` | Child node indices, or $-1$ for leaves |
+    | `parent[i]` | Parent index, or $-1$ for the root |
+    | `mu[i]` | Leaf value $\mu_\ell$ (meaningful only when `split_var[i] == -1`) |
+
+    A leaf is any node whose `split_var` equals $-1$.  This representation is
+    tedious to read but cheap to copy, which the sampler does on every proposed
+    move.
 
     The figure below shows what a single shallow tree looks like in 2D: each
     region of the input space is one leaf, painted with that leaf's $\mu$.
@@ -444,73 +517,35 @@ def _(mo):
     each fit to the residual after subtracting the others, with a prior that
     keeps any individual tree from swallowing the signal alone.
 
-    The four panels below show the same 1D fit at $m \in \{1, 5, 100, 200\}$.
-    With $m=1$ the function is a single piecewise constant — visibly blocky.
-    By $m=100$ the steps blur into a smooth curve that closely tracks the true
-    $f(x)$ at the hump near $x=0.75$.
+    Use the slider below to watch this buildup. The plot shows a single
+    posterior draw — one realization of the $m$-tree ensemble — as the
+    piecewise-constant function it actually is. At $m=1$ the fit is one coarse
+    step function, visibly blocky. As $m$ grows the ensemble becomes a finer
+    staircase; by $m = 100$–$200$ the steps are fine enough to track the smooth
+    hump near $x = 0.75$.
     """)
     return
 
 
 @app.cell(hide_code=True)
-def _(X_toy, X_toy_grid, f_toy_true, np, predict_at, run_bart, y_toy):
-    # 1D buildup posteriors at m in {1, 5, 20, 100, 200} on the toy DGP. ~1 s.
-    buildup_ms = [1, 5, 20, 100, 200]
-    buildup_fits_raw = {}
-    for _m in buildup_ms:
-        _rng = np.random.default_rng(20260423 + 100 + _m)
-        _f = run_bart(X_toy, y_toy, m=_m, n_iter=600, burn_in=200, rng=_rng)
-        _draws = predict_at(_f, X_toy_grid)
-        buildup_fits_raw[_m] = {
-            "f_mean": _draws.mean(axis=0),
-            "f_lo": np.quantile(_draws, 0.05, axis=0),
-            "f_hi": np.quantile(_draws, 0.95, axis=0),
-            "sigma_mean": float(_f["sigma_draws"].mean()),
-        }
-    buildup = {
+def _(X_toy, X_toy_grid, f_toy_true, y_toy):
+    # Gradient-boosted-tree fit on the 1D toy DGP for the intro contrast. <50 ms.
+    from sklearn.ensemble import GradientBoostingRegressor
+
+    _gbm = GradientBoostingRegressor(random_state=20260423)
+    _gbm.fit(X_toy, y_toy)
+    gbm_demo = {
         "x_train": X_toy[:, 0],
         "y_train": y_toy,
         "x_grid": X_toy_grid[:, 0],
         "f_true": f_toy_true,
-        "ms": buildup_ms,
-        "fits": buildup_fits_raw,
+        "f_pred": _gbm.predict(X_toy_grid),
     }
-    return (buildup,)
-
-
-@app.cell(hide_code=True)
-def _(buildup, mo, plt):
-
-    def _section2_buildup():
-        if buildup is None:
-            return mo.md("*Compute cell hasn't finished yet.*")
-        x = buildup["x_train"]
-        y = buildup["y_train"]
-        xg = buildup["x_grid"]
-        f_true = buildup["f_true"]
-
-        ms_to_show = [1, 5, 100, 200]
-        fig, axes = plt.subplots(1, 4, figsize=(13, 3.2), sharey=True)
-        for ax, m in zip(axes, ms_to_show):
-            fit = buildup["fits"][m]
-            ax.scatter(x, y, s=10, alpha=0.55, color="#333")
-            ax.plot(xg, f_true, color="#c44e52", lw=1.2, alpha=0.8)
-            ax.plot(xg, fit["f_mean"], color="#4c72b0", lw=1.6)
-            ax.fill_between(xg, fit["f_lo"], fit["f_hi"], color="#4c72b0", alpha=0.18)
-            ax.set_title(f"m = {m}")
-            ax.set_xlabel("x")
-        axes[0].set_ylabel("y")
-        fig.suptitle("As m grows, BART's piecewise-constant fit smooths out", y=1.02)
-        fig.tight_layout()
-        return fig
-
-    _section2_buildup()
-    return
+    return (gbm_demo,)
 
 
 @app.cell(hide_code=True)
 def _(mo):
-
     buildup_m = mo.ui.slider(
         steps=[1, 5, 20, 100, 200],
         value=20,
@@ -518,8 +553,8 @@ def _(mo):
     )
     mo.md(
         rf"""
-        **Interactive: choose m.** The fit below comes from a precomputed run; the
-        slider just swaps in the cached posterior at the selected $m$.
+        **Interactive: choose m.** The draw below comes from a precomputed run; the
+        slider just swaps in a stored posterior draw at the selected $m$.
 
         {buildup_m}
         """
@@ -529,7 +564,6 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(buildup, buildup_m, mo, plt):
-
     def _buildup_slider_plot():
         if buildup is None:
             return mo.md("*Compute cell hasn't finished yet.*")
@@ -543,18 +577,21 @@ def _(buildup, buildup_m, mo, plt):
         fig, ax = plt.subplots(figsize=(7, 3.6))
         ax.scatter(x, y, s=18, alpha=0.7, color="#333", label="observations")
         ax.plot(xg, f_true, color="#c44e52", lw=1.4, label=r"true $f(x)$")
-        ax.plot(xg, fit["f_mean"], color="#4c72b0", lw=2.0, label=f"BART (m={m})")
-        ax.fill_between(
-            xg, fit["f_lo"], fit["f_hi"], color="#4c72b0", alpha=0.18, label="90% band"
+        ax.plot(
+            xg,
+            fit["f_draw"],
+            color="#4c72b0",
+            lw=1.8,
+            drawstyle="steps-mid",
+            label=f"one BART draw (m={m})",
         )
         ax.set_xlabel("x")
         ax.set_ylabel("y")
-        ax.set_title(
-            rf"$\hat f(x)$ at m={m}    (mean $\sigma$ = {fit['sigma_mean']:.2f})"
-        )
+        ax.set_title(f"One posterior draw at m={m}")
         ax.legend(frameon=False, loc="upper left")
         fig.tight_layout()
         return fig
+
 
     _buildup_slider_plot()
     return
@@ -894,15 +931,7 @@ def _(mo):
     return
 
 
-@app.class_definition(hide_code=True)
-# ─── Binary tree, stored as parallel arrays ──────────────────────────────
-#   split_var[i] = -1  iff node i is a leaf, else the column index to split on
-#   split_val[i] = cut threshold  (internal)  OR  unused (leaf)
-#   left[i], right[i] = children indices       OR  -1, -1 (leaf)
-#   parent[i] = parent index, or -1 for the root
-#   mu[i]     = leaf value (meaningful only for leaves)
-
-
+@app.class_definition
 class Tree:
     """Binary regression tree. Starts as a single-leaf root."""
 
@@ -979,16 +1008,15 @@ def _(np):
     return assign_leaves, predict
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(assign_leaves, np):
-    # ─── Marginal likelihood after integrating out leaf values ───────────────
-
     def log_marginal_leaf(n_l, s_l, sigma2, sigma_mu2):
         """Contribution of one leaf to log p(r | T, σ)."""
         denom = sigma2 + n_l * sigma_mu2
         return 0.5 * np.log(sigma2 / denom) + 0.5 * sigma_mu2 * s_l**2 / (
             sigma2 * denom
         )
+
 
     def log_marginal_tree(tree, X, r, sigma2, sigma_mu2):
         """Log marginal likelihood of residuals r given tree structure."""
@@ -1006,10 +1034,8 @@ def _(assign_leaves, np):
     return (log_marginal_tree,)
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(np):
-    # ─── Tree prior: α(1+d)^{-β} for splitting at depth d ────────────────────
-
     def log_prior_tree(tree, alpha, beta):
         """log p(T) under the CGM98 prior, up to constants from split rules."""
         logp = 0.0
@@ -1025,7 +1051,7 @@ def _(np):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(np):
     def splittable_cuts(X_leaf, col):
         """Unique midpoints of sorted values in column `col` for rows in a leaf."""
@@ -1079,7 +1105,7 @@ def _(np):
     return compact, splittable_cuts
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(log_marginal_tree, np, splittable_cuts):
     def grow_proposal(tree, X, leaf_of, r, rng, alpha, beta, sigma2, sigma_mu2):
         """Propose a grow. Returns (new_tree, log_acceptance) or (None, -inf)."""
@@ -1137,7 +1163,7 @@ def _(log_marginal_tree, np, splittable_cuts):
     return (grow_proposal,)
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(compact, log_marginal_tree, np):
     def prune_proposal(tree, X, r, rng, alpha, beta, sigma2, sigma_mu2):
         """Propose a prune. Returns (new_tree, log_acceptance) or (None, -inf)."""
@@ -1179,7 +1205,7 @@ def _(compact, log_marginal_tree, np):
     return (prune_proposal,)
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(assign_leaves, np):
     def draw_leaf_values(tree, X, r, rng, sigma2, sigma_mu2):
         """Sample μ_ℓ for every leaf. Returns the updated tree (mutated in place)."""
@@ -1215,7 +1241,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(chi2, np):
     def draw_sigma2(residuals, nu, lam, rng):
         """Inverse-χ² conditional for σ²."""
@@ -1288,20 +1314,17 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(
     assign_leaves,
     calibrate_sigma_prior,
     draw_leaf_values,
     draw_sigma2,
     grow_proposal,
-    mo,
     np,
     predict,
     prune_proposal,
 ):
-    # ─── The BART sampler: Gibbs over trees, σ, and leaves ──────────────────
-
     def run_bart(
         X,
         y,
@@ -1350,9 +1373,7 @@ def _(
         accept_stats = {"grow": [0, 0], "prune": [0, 0]}
         kept = 0
 
-        # mo.status.progress_bar is marimo's iteration progress widget — not a
-        # sampler dependency; swap for tqdm or range() outside marimo
-        for it in mo.status.progress_bar(range(n_iter), title="MH-BART sampling"):
+        for it in range(n_iter):
             for j in range(m):
                 Rj = y_scaled - tree_preds.sum(axis=0) + tree_preds[j]
 
@@ -1454,7 +1475,6 @@ def _(np, predict):
 
 @app.cell(hide_code=True)
 def _(fit_fried, mo, np, plt):
-
     def _coverage_plot():
         if fit_fried is None:
             return mo.md("*Compute cell for friedman_m50 hasn't finished yet.*")
@@ -1493,7 +1513,7 @@ def _(fit_fried, mo, np, plt):
             ax.set_xlim(lim)
             ax.set_ylim(lim)
             ax.set_xlabel(r"true $f(x)$")
-            ax.set_ylabel(r"posterior mean $\hat f(x)$ with 90% CI")
+            ax.set_ylabel(r"posterior predictive mean $\hat f(x)$ with 90% PI")
             ax.set_title(f"{tag} - 90% coverage: {cov:.0%}")
 
         fig.suptitle(
@@ -1521,13 +1541,13 @@ def _(mo):
     * Linero & Yang (2018) show that as $m \to \infty$ the BART prior
       converges to a (nowhere-differentiable) Gaussian Process, which
       explains why "more trees" keeps helping for a while.
-    * `pymc-bart` lets users compare $m$ values via PSIS-LOO-CV
-      (`az.compare`); we'll skip that machinery here and just look at the
-      σ posterior, in-sample coverage, and out-of-sample MSE on the
-      Friedman DGP — three quantities that move together as $m$ grows.
 
-    The cells below refit BART at three values of $m$ on the Friedman DGP;
-    the comparison plot summarises the three quantities together.
+    The interactive plot below refits BART at several values of $m$ on the
+    1D toy data from earlier.  The left panel shows the posterior mean and
+    90% credible band against the true function; the right panel shows the
+    posterior for $\sigma$.  Switch $m$ to watch the fit smooth out, the
+    band tighten, and the $\sigma$ posterior concentrate around the true
+    noise level.
     """)
     return
 
@@ -1572,18 +1592,32 @@ def _(
     # Friedman calibration fits at m in {10, 50, 200}. ~10 s total.
     friedman_fits = {}
     for _m in (10, 50, 200):
-        _rng = np.random.default_rng(20260423)
+        _rng = np.random.default_rng(20260423 + _m)
         _fit = run_bart(X_fried, y_fried, m=_m, n_iter=2000, burn_in=200, rng=_rng)
-        _test_draws = predict_at(_fit, X_fried_test)
         _f_true_in = friedman(X_fried, noise=0.0)
+
+        # In-sample posterior *prediction* intervals (add observation noise to f draws)
+        _noise_in = _rng.normal(
+            0,
+            np.sqrt(_fit["sigma2_draws_scaled"])[:, None],
+            size=_fit["f_draws_scaled"].shape,
+        )
+        _pred_in_scaled = _fit["f_draws_scaled"] + _noise_in
+        _pred_in = _pred_in_scaled * _fit["y_range"] + (_fit["y_min"] + 0.5 * _fit["y_range"])
+
+        # Out-of-sample posterior *prediction* intervals
+        _test_draws = predict_at(_fit, X_fried_test)
+        _noise_test = _rng.normal(0, _fit["sigma_draws"][:, None], size=_test_draws.shape)
+        _pred_test = _test_draws + _noise_test
+
         _summary = {
             "sigma_draws": _fit["sigma_draws"],
-            "f_mean": _fit["f_mean"],
-            "f_lo": _fit["f_lo"],
-            "f_hi": _fit["f_hi"],
-            "f_test_mean": _test_draws.mean(axis=0),
-            "f_test_lo": np.quantile(_test_draws, 0.05, axis=0),
-            "f_test_hi": np.quantile(_test_draws, 0.95, axis=0),
+            "f_mean": _pred_in.mean(axis=0),
+            "f_lo": np.quantile(_pred_in, 0.05, axis=0),
+            "f_hi": np.quantile(_pred_in, 0.95, axis=0),
+            "f_test_mean": _pred_test.mean(axis=0),
+            "f_test_lo": np.quantile(_pred_test, 0.05, axis=0),
+            "f_test_hi": np.quantile(_pred_test, 0.95, axis=0),
             "f_test_true": y_fried_test_true,
             "f_true_in": _f_true_in,
             "splits": _fit["splits"],
@@ -1652,17 +1686,46 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(mo):
+def _(X_toy, X_toy_grid, np, predict_at, run_bart, y_toy):
+    # 1D toy calibration fits at m in {1, 5, 10, 20, 50, 100, 200}. ~1.5 s.
+    toy_cal_ms = [1, 5, 10, 20, 50, 100, 200]
+    toy_calibration_fits = {}
+    for _m in toy_cal_ms:
+        _rng = np.random.default_rng(20260423 + 200 + _m)
+        _fit = run_bart(X_toy, y_toy, m=_m, n_iter=600, burn_in=200, rng=_rng)
+        _draws_grid = predict_at(_fit, X_toy_grid)
+        _x_train = X_toy[:, 0]
+        _f_true_train = np.where(_x_train < 0.4, -1.0, 0.0) + 1.5 * np.exp(
+            -((_x_train - 0.75) ** 2) / 0.01
+        )
+        _summary = {
+            "f_mean_train": _fit["f_mean"],
+            "f_lo_train": _fit["f_lo"],
+            "f_hi_train": _fit["f_hi"],
+            "f_mean_grid": _draws_grid.mean(axis=0),
+            "f_lo_grid": np.quantile(_draws_grid, 0.05, axis=0),
+            "f_hi_grid": np.quantile(_draws_grid, 0.95, axis=0),
+            "sigma_draws": _fit["sigma_draws"],
+        }
+        _summary["coverage"] = float(
+            ((_summary["f_lo_train"] <= _f_true_train) & (_f_true_train <= _summary["f_hi_train"])).mean()
+        )
+        _summary["mse"] = float(np.mean((_summary["f_mean_train"] - _f_true_train) ** 2))
+        toy_calibration_fits[_m] = _summary
+    return toy_cal_ms, toy_calibration_fits
 
+
+@app.cell(hide_code=True)
+def _(mo):
     calibration_m = mo.ui.slider(
-        steps=[10, 50, 200],
-        value=50,
+        steps=[1, 5, 10, 20, 50, 100, 200],
+        value=20,
         label="m (number of trees)",
     )
     mo.md(
         rf"""
-        **Interactive: sweep m.** Three precomputed Friedman fits at m in
-        {{10, 50, 200}}. Drag the slider to compare the diagnostics.
+        **Interactive: choose m.** Pick a value of m from the slider to see the BART
+        fit on the 1D toy data and the corresponding σ posterior.
 
         {calibration_m}
         """
@@ -1671,62 +1734,55 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(calibration_m, friedman_fits, mo, plt):
-
+def _(
+    PALETTE,
+    X_toy,
+    X_toy_grid,
+    calibration_m,
+    f_toy_true,
+    mo,
+    plt,
+    toy_cal_ms,
+    toy_calibration_fits,
+    y_toy,
+):
     def _calibration_sweep():
-        fits = friedman_fits
-        if any(fits[m] is None for m in (10, 50, 200)):
-            return mo.md(
-                "*Compute cells for friedman_m10/m50/m200 haven't finished yet.*"
-            )
+        fits = toy_calibration_fits
+        if any(fits[m] is None for m in toy_cal_ms):
+            return mo.md("*Compute cells for the calibration sweep haven't finished yet.*")
 
         sel = calibration_m.value
-        ms_order = [10, 50, 200]
-        colors = {10: "#dd8452", 50: "#4c72b0", 200: "#c44e52"}
+        f = fits[sel]
 
-        fig, axes = plt.subplots(1, 3, figsize=(13, 3.8))
+        fig, (ax_fit, ax_sigma) = plt.subplots(1, 2, figsize=(11, 4.2))
 
-        for m in ms_order:
-            sd = fits[m]["sigma_draws"]
-            is_sel = m == sel
-            axes[0].hist(
-                sd,
-                bins=30,
-                density=True,
-                alpha=0.75 if is_sel else 0.3,
-                color=colors[m],
-                edgecolor="white",
-                label=f"m={m} (mean = {sd.mean():.2f})",
-            )
-        axes[0].axvline(1.0, color="#333", ls="--", lw=1, label=r"true $\sigma=1$")
-        axes[0].set_xlabel(r"$\sigma$")
-        axes[0].set_ylabel("posterior density")
-        axes[0].set_title(r"$\sigma$ posterior shrinks as m grows")
-        axes[0].legend(frameon=False, fontsize=8)
+        # Left: fit on 1D toy
+        x = X_toy[:, 0]
+        xg = X_toy_grid[:, 0]
+        ax_fit.scatter(x, y_toy, s=18, alpha=0.7, color="#333", label="observations", zorder=3)
+        ax_fit.plot(xg, f_toy_true, color=PALETTE["truth"], lw=1.4, ls="--", label=r"true $f(x)$", zorder=2)
+        ax_fit.fill_between(xg, f["f_lo_grid"], f["f_hi_grid"], color=PALETTE["posterior"], alpha=0.25, label="90% credible band", zorder=1)
+        ax_fit.plot(xg, f["f_mean_grid"], color=PALETTE["posterior"], lw=1.6, label="posterior mean", zorder=2)
+        ax_fit.set_xlabel("x")
+        ax_fit.set_ylabel("y")
+        ax_fit.set_title(f"In-sample fit at m = {sel}")
+        ax_fit.legend(frameon=False, loc="upper left")
 
-        covs = [fits[m]["coverage_in"] for m in ms_order]
-        bar_colors = [colors[m] if m == sel else "#cccccc" for m in ms_order]
-        axes[1].bar(
-            [str(m) for m in ms_order], covs, color=bar_colors, edgecolor="white"
+        # Right: σ posterior
+        ax_sigma.hist(f["sigma_draws"], bins=30, color=PALETTE["posterior"], edgecolor="white", alpha=0.8)
+        ax_sigma.axvline(0.15, color=PALETTE["truth"], lw=2, ls="--", label=r"true $\sigma = 0.15$")
+        ax_sigma.set_xlabel(r"$\sigma$")
+        ax_sigma.set_ylabel("posterior draws")
+        ax_sigma.set_title(r"Posterior of $\sigma$")
+        ax_sigma.legend(frameon=False)
+
+        fig.suptitle(
+            f"m = {sel}:  coverage = {f['coverage']:.0%},  MSE = {f['mse']:.3f}",
+            y=1.02,
         )
-        axes[1].axhline(0.9, color="#333", ls="--", lw=1, label="nominal 90%")
-        axes[1].set_ylim(0, 1.05)
-        axes[1].set_xlabel("m")
-        axes[1].set_ylabel("in-sample 90% coverage of f")
-        axes[1].set_title("Coverage stays calibrated")
-        axes[1].legend(frameon=False)
-
-        mses = [fits[m]["mse_oos"] for m in ms_order]
-        axes[2].bar(
-            [str(m) for m in ms_order], mses, color=bar_colors, edgecolor="white"
-        )
-        axes[2].set_xlabel("m")
-        axes[2].set_ylabel("out-of-sample MSE")
-        axes[2].set_title("Test-set fit improves with m")
-
-        fig.suptitle(f"Choosing m on the Friedman DGP - highlighted: m = {sel}", y=1.02)
         fig.tight_layout()
         return fig
+
 
     _calibration_sweep()
     return
@@ -1767,7 +1823,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(np):
     def prune_to_subset(tree, kept_vars):
         """Return a copy of `tree` with all splits on excluded variables collapsed.
@@ -2075,7 +2131,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(log_marginal_tree, np, splittable_cuts):
     def grow_proposal_sparse(
         tree, X, leaf_of, r, rng, alpha, beta, sigma2, sigma_mu2, split_prob
@@ -2135,14 +2191,13 @@ def _(log_marginal_tree, np, splittable_cuts):
     return (grow_proposal_sparse,)
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(
     assign_leaves,
     calibrate_sigma_prior,
     draw_leaf_values,
     draw_sigma2,
     grow_proposal_sparse,
-    mo,
     np,
     predict,
     prune_proposal,
@@ -2193,7 +2248,7 @@ def _(
         split_prob_history = np.zeros((n_iter, p))
         kept = 0
 
-        for it in mo.status.progress_bar(range(n_iter), title="sparse-BART sampling"):
+        for it in range(n_iter):
             if it < burn_in:
                 counts = np.zeros(p, dtype=float)
                 for t in trees:
@@ -2381,6 +2436,35 @@ def _(mo):
     here shows the mechanism, not the tuning that makes it robust.
     """)
     return
+
+
+@app.cell(hide_code=True)
+def _(X_toy, X_toy_grid, f_toy_true, np, predict_at, run_bart, y_toy):
+    # 1D buildup posteriors at m in {1, 5, 20, 100, 200} on the example data. ~1 s.
+    buildup_ms = [1, 5, 20, 100, 200]
+    buildup_fits_raw = {}
+    for _m in buildup_ms:
+        _rng = np.random.default_rng(20260423 + 100 + _m)
+        _f = run_bart(X_toy, y_toy, m=_m, n_iter=600, burn_in=200, rng=_rng)
+        _draws = predict_at(_f, X_toy_grid)
+        _mean = _draws.mean(axis=0)
+        _idx = int(((_draws - _mean) ** 2).sum(axis=1).argmin())
+        buildup_fits_raw[_m] = {
+            "f_mean": _mean,
+            "f_lo": np.quantile(_draws, 0.05, axis=0),
+            "f_hi": np.quantile(_draws, 0.95, axis=0),
+            "f_draw": _draws[_idx],  # one representative ensemble realization
+            "sigma_mean": float(_f["sigma_draws"].mean()),
+        }
+    buildup = {
+        "x_train": X_toy[:, 0],
+        "y_train": y_toy,
+        "x_grid": X_toy_grid[:, 0],
+        "f_true": f_toy_true,
+        "ms": buildup_ms,
+        "fits": buildup_fits_raw,
+    }
+    return (buildup,)
 
 
 @app.cell

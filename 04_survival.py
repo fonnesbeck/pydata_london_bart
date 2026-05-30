@@ -67,7 +67,6 @@ def _():
     import pymc_bart as pmb
 
     RANDOM_SEED = 20260608
-    rng = np.random.default_rng(RANDOM_SEED)
     return RANDOM_SEED, az, np, pl, plt, pm, pmb
 
 
@@ -155,8 +154,6 @@ def _(RANDOM_SEED, np, pmb):
 
     sim_X, sim_y = simulate_survival(n_subjects=500, max_t=36, seed=RANDOM_SEED)
     sim_q_idx = ((sim_X[:, 0].astype(int) - 1) // 3).astype(int)
-    sim_n_subjects = 500
-
     # GLM design matrix for the synthetic data: standardize age and year,
     # binarize throws / rev, dummy-code the 5-level surgeon (reference =
     # level 0). doy passes through as the [0, 1] noise feature.
@@ -178,23 +175,11 @@ def _(RANDOM_SEED, np, pmb):
             sim_surg_dummies,
         ]
     )
-    sim_glm_feature_names = [
-        "age_std",
-        "year_std",
-        "doy",
-        "throws",
-        "rev",
-        "surg_1",
-        "surg_2",
-        "surg_3",
-        "surg_4",
-    ]
     sim_split_rules = (
         [pmb.ContinuousSplitRule] * 4
         + [pmb.OneHotSplitRule] * 2
         + [pmb.SubsetSplitRule]
     )
-    sim_feature_names = ["t", "age", "year", "doy", "throws", "rev", "surgeon"]
     f"sim_X shape {sim_X.shape}, events {int(sim_y.sum())}, sim_X_glm cols {sim_X_glm.shape[1]}"
     return (
         sim_X,
@@ -647,9 +632,6 @@ def _(np, surgeon_levels, surv_X):
         ]
     )
 
-    glm_feature_names = ["age_std", "year_std", "doy", "throws_R", "revision"] + [
-        f"surg_{surgeon_levels[i]}" for i in _non_ref
-    ]
     glm_non_ref_surg = _non_ref
     f"surv_X_glm shape {surv_X_glm.shape}, q_idx range [{q_idx.min()}, {q_idx.max()}]"
     return (

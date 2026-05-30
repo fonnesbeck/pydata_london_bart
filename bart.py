@@ -2322,7 +2322,7 @@ def _(np):
 
 @app.cell
 def _(X_ord, np, pm, pmb, y_ord):
-    with pm.Model() as model_sat:
+    with pm.Model():
         η = pmb.BART("η", X=X_ord, Y=y_ord.astype(float), m=50)
         γ_free = pm.Normal(
             "γ_free",
