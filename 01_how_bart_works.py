@@ -20,11 +20,11 @@ def _():
     # Shared colour scheme for every figure in this notebook. Define once here and
     # reference these names instead of hand-picking hex codes per plot.
     PALETTE = {
-        "obs": "#4c4c4c",        # observed data points
-        "truth": "#c44e52",      # the true function f(x)
+        "obs": "#4c4c4c",  # observed data points
+        "truth": "#c44e52",  # the true function f(x)
         "posterior": "#4c72b0",  # BART posterior mean / draws / credible band
-        "accent": "#dd8452",     # a secondary model (e.g. gradient boosting)
-        "muted": "#b0b0b0",      # de-emphasised series
+        "accent": "#dd8452",  # a secondary model (e.g. gradient boosting)
+        "muted": "#b0b0b0",  # de-emphasised series
     }
     # Colourblind-friendly categorical cycle for grouped series (m-sweeps, etc.).
     CYCLE = ["#4c72b0", "#dd8452", "#55a868", "#c44e52", "#8172b3", "#937860"]
@@ -111,14 +111,15 @@ def _(gbm_demo, mo, plt):
         fig, ax = plt.subplots(figsize=(7, 3.6))
         ax.scatter(x, y, s=18, alpha=0.7, color="#333", label="observations")
         ax.plot(xg, f_true, color="#c44e52", lw=1.6, label=r"true $f(x)$")
-        ax.plot(xg, f_pred, color="#55a868", lw=2.0, label="gradient-boosting prediction")
+        ax.plot(
+            xg, f_pred, color="#55a868", lw=2.0, label="gradient-boosting prediction"
+        )
         ax.set_xlabel("x")
         ax.set_ylabel("y")
         ax.set_title("Gradient Boosting")
         ax.legend(frameon=False, loc="upper left")
         fig.tight_layout()
         return fig
-
 
     _gbm_demo_fig()
     return
@@ -167,7 +168,6 @@ def _(buildup, mo, plt):
         ax.legend(frameon=False, loc="upper left")
         fig.tight_layout()
         return fig
-
 
     _section0_headline()
     return
@@ -592,7 +592,6 @@ def _(buildup, buildup_m, mo, plt):
         fig.tight_layout()
         return fig
 
-
     _buildup_slider_plot()
     return
 
@@ -1016,7 +1015,6 @@ def _(assign_leaves, np):
         return 0.5 * np.log(sigma2 / denom) + 0.5 * sigma_mu2 * s_l**2 / (
             sigma2 * denom
         )
-
 
     def log_marginal_tree(tree, X, r, sigma2, sigma_mu2):
         """Log marginal likelihood of residuals r given tree structure."""
@@ -1603,11 +1601,15 @@ def _(
             size=_fit["f_draws_scaled"].shape,
         )
         _pred_in_scaled = _fit["f_draws_scaled"] + _noise_in
-        _pred_in = _pred_in_scaled * _fit["y_range"] + (_fit["y_min"] + 0.5 * _fit["y_range"])
+        _pred_in = _pred_in_scaled * _fit["y_range"] + (
+            _fit["y_min"] + 0.5 * _fit["y_range"]
+        )
 
         # Out-of-sample posterior *prediction* intervals
         _test_draws = predict_at(_fit, X_fried_test)
-        _noise_test = _rng.normal(0, _fit["sigma_draws"][:, None], size=_test_draws.shape)
+        _noise_test = _rng.normal(
+            0, _fit["sigma_draws"][:, None], size=_test_draws.shape
+        )
         _pred_test = _test_draws + _noise_test
 
         _summary = {
@@ -1687,8 +1689,8 @@ def _(
 
 @app.cell(hide_code=True)
 def _(X_toy, X_toy_grid, np, predict_at, run_bart, y_toy):
-    # 1D toy calibration fits at m in {1, 5, 10, 20, 50, 100, 200}. ~1.5 s.
-    toy_cal_ms = [1, 5, 10, 20, 50, 100, 200]
+    # 1D toy calibration fits at m in {1, 5, 10, 15, 20, 40, 50, 100, 200}. ~1.5 s.
+    toy_cal_ms = [1, 5, 10, 15, 20, 40, 50, 100, 200]
     toy_calibration_fits = {}
     for _m in toy_cal_ms:
         _rng = np.random.default_rng(20260423 + 200 + _m)
@@ -1708,9 +1710,14 @@ def _(X_toy, X_toy_grid, np, predict_at, run_bart, y_toy):
             "sigma_draws": _fit["sigma_draws"],
         }
         _summary["coverage"] = float(
-            ((_summary["f_lo_train"] <= _f_true_train) & (_f_true_train <= _summary["f_hi_train"])).mean()
+            (
+                (_summary["f_lo_train"] <= _f_true_train)
+                & (_f_true_train <= _summary["f_hi_train"])
+            ).mean()
         )
-        _summary["mse"] = float(np.mean((_summary["f_mean_train"] - _f_true_train) ** 2))
+        _summary["mse"] = float(
+            np.mean((_summary["f_mean_train"] - _f_true_train) ** 2)
+        )
         toy_calibration_fits[_m] = _summary
     return toy_cal_ms, toy_calibration_fits
 
@@ -1749,7 +1756,9 @@ def _(
     def _calibration_sweep():
         fits = toy_calibration_fits
         if any(fits[m] is None for m in toy_cal_ms):
-            return mo.md("*Compute cells for the calibration sweep haven't finished yet.*")
+            return mo.md(
+                "*Compute cells for the calibration sweep haven't finished yet.*"
+            )
 
         sel = calibration_m.value
         f = fits[sel]
@@ -1759,18 +1768,51 @@ def _(
         # Left: fit on 1D toy
         x = X_toy[:, 0]
         xg = X_toy_grid[:, 0]
-        ax_fit.scatter(x, y_toy, s=18, alpha=0.7, color="#333", label="observations", zorder=3)
-        ax_fit.plot(xg, f_toy_true, color=PALETTE["truth"], lw=1.4, ls="--", label=r"true $f(x)$", zorder=2)
-        ax_fit.fill_between(xg, f["f_lo_grid"], f["f_hi_grid"], color=PALETTE["posterior"], alpha=0.25, label="90% credible band", zorder=1)
-        ax_fit.plot(xg, f["f_mean_grid"], color=PALETTE["posterior"], lw=1.6, label="posterior mean", zorder=2)
+        ax_fit.scatter(
+            x, y_toy, s=18, alpha=0.7, color="#333", label="observations", zorder=3
+        )
+        ax_fit.plot(
+            xg,
+            f_toy_true,
+            color=PALETTE["truth"],
+            lw=1.4,
+            ls="--",
+            label=r"true $f(x)$",
+            zorder=2,
+        )
+        ax_fit.fill_between(
+            xg,
+            f["f_lo_grid"],
+            f["f_hi_grid"],
+            color=PALETTE["posterior"],
+            alpha=0.25,
+            label="90% credible band",
+            zorder=1,
+        )
+        ax_fit.plot(
+            xg,
+            f["f_mean_grid"],
+            color=PALETTE["posterior"],
+            lw=1.6,
+            label="posterior mean",
+            zorder=2,
+        )
         ax_fit.set_xlabel("x")
         ax_fit.set_ylabel("y")
         ax_fit.set_title(f"In-sample fit at m = {sel}")
         ax_fit.legend(frameon=False, loc="upper left")
 
         # Right: σ posterior
-        ax_sigma.hist(f["sigma_draws"], bins=30, color=PALETTE["posterior"], edgecolor="white", alpha=0.8)
-        ax_sigma.axvline(0.15, color=PALETTE["truth"], lw=2, ls="--", label=r"true $\sigma = 0.15$")
+        ax_sigma.hist(
+            f["sigma_draws"],
+            bins=30,
+            color=PALETTE["posterior"],
+            edgecolor="white",
+            alpha=0.8,
+        )
+        ax_sigma.axvline(
+            0.15, color=PALETTE["truth"], lw=2, ls="--", label=r"true $\sigma = 0.15$"
+        )
         ax_sigma.set_xlabel(r"$\sigma$")
         ax_sigma.set_ylabel("posterior draws")
         ax_sigma.set_title(r"Posterior of $\sigma$")
@@ -1782,7 +1824,6 @@ def _(
         )
         fig.tight_layout()
         return fig
-
 
     _calibration_sweep()
     return

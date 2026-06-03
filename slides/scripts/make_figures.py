@@ -326,14 +326,16 @@ def anim_sum_of_trees_buildup(ns):
 def fig_prior_tree_sizes(ns):
     tsd = ns["terminal_size_dist"]
     betas = [(0.95, 0.5), (0.95, 2.0), (0.95, 4.0)]
-    fig, axes = plt.subplots(1, 3, figsize=(12, 3.4), sharey=True)
+    # Shared bins/axes across panels so the distributions are directly comparable:
+    # higher beta visibly shifts mass toward fewer terminal nodes.
+    bins = np.arange(1, 15 + 2) - 0.5
+    fig, axes = plt.subplots(1, 3, figsize=(12, 3.4), sharex=True, sharey=True)
     for ax, (a, beta) in zip(axes, betas):
         sizes = tsd(a, beta)
-        bins = np.arange(1, min(sizes.max(), 15) + 2) - 0.5
         ax.hist(sizes, bins=bins, density=True, color="#4c72b0", edgecolor="white")
-        ax.set_xlabel("number of terminal nodes")
         ax.set_title(rf"$\alpha={a:.2f},\ \beta={beta:.1f}$")
     axes[0].set_ylabel("prior probability")
+    fig.supxlabel("number of terminal nodes")
     fig.suptitle(r"Higher $\beta$ punishes depth harder → smaller trees", y=1.04)
     fig.tight_layout()
     save(fig, "prior_tree_sizes.png")

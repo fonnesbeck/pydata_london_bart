@@ -87,6 +87,29 @@ def _(pl):
 
 
 @app.cell(hide_code=True)
+def _(f1_df, mo):
+    # Training-subsample control. Defaults to 10% so the notebook opens light
+    # on memory and fits fast; pick a larger fraction (up to Full) only for a
+    # deliverable-fidelity run. The fraction applies to the training rows only
+    # (see data prep below); the held-out test set is always full size so OOS
+    # coverage and PIT diagnostics stay meaningful.
+    _n_train = int(0.8 * f1_df.shape[0])
+    _subsample_options = {
+        f"Full (~{_n_train} laps)": 1.0,
+        f"50% (~{int(0.5 * _n_train)} laps)": 0.5,
+        f"25% (~{int(0.25 * _n_train)} laps)": 0.25,
+        f"10% (~{int(0.1 * _n_train)} laps)": 0.1,
+    }
+    subsample = mo.ui.radio(
+        options=_subsample_options,
+        value=f"10% (~{int(0.1 * _n_train)} laps)",
+        label="**Training subsample** &mdash; smaller = faster fits for iteration",
+    )
+    subsample
+    return (subsample,)
+
+
+@app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
     ### Aside: categorical splits with `OneHotSplitRule` and `SubsetSplitRule`
@@ -111,7 +134,7 @@ def _(mo):
 
 
 @app.cell
-def _(RANDOM_SEED, f1_df, np):
+def _(RANDOM_SEED, f1_df, np, subsample):
     _num_cols = [
         "tyre_life",
         "lap_number",
@@ -144,14 +167,18 @@ def _(RANDOM_SEED, f1_df, np):
     _rng_split = np.random.default_rng(RANDOM_SEED)
     _perm = _rng_split.permutation(_X.shape[0])
     _n_train = int(0.8 * _X.shape[0])
-    train_idx = _perm[:_n_train]
     test_idx = _perm[_n_train:]
+    # Apply the training-subsample control. _perm is already shuffled, so the
+    # prefix is a uniform random subsample across all five venues. test_idx is
+    # left at full size.
+    _n_sub = int(subsample.value * _n_train)
+    train_idx = _perm[:_n_sub]
     X_train = _X[train_idx]
     y_train = _y[train_idx]
     X_test = _X[test_idx]
     y_test = _y[test_idx]
 
-    f"train: {X_train.shape[0]} laps | test: {X_test.shape[0]} laps | venues: {len(_venues)}"
+    f"train: {X_train.shape[0]} laps ({subsample.value:.0%} of {_n_train}) | test: {X_test.shape[0]} laps | venues: {len(_venues)}"
     return (
         X_test,
         X_train,
@@ -647,7 +674,9 @@ def _(az, idata_f1, idata_f1_t, pl):
         _sig = float(idata["posterior"]["sigma"].mean().item())
         _ndiv = int(idata["sample_stats"]["diverging"].sum().item())
         _summary = az.summary(idata, var_names=["mu"], round_to=3)
-        _nu = round(float(idata["posterior"]["nu"].mean().item()), 1) if with_nu else None
+        _nu = (
+            round(float(idata["posterior"]["nu"].mean().item()), 1) if with_nu else None
+        )
         return {
             "variant": name,
             "sigma_hat": round(_sig, 3),
@@ -676,7 +705,6 @@ def _(mo):
     residuals further; with $n \approx 4{,}150$ training laps across the
     5 venues the model has enough signal to support the deeper ensemble.
     """)
-
     return
 
 
@@ -705,7 +733,6 @@ def _(mo):
     weight (how much to trust each fit in a model average). Pick the
     smallest `m` whose ELPD is within a few `dse` of the largest.
     """)
-
     return
 
 
