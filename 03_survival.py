@@ -6,7 +6,9 @@ app = marimo.App(width="medium")
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.vstack(
+        [
+            mo.md(r"""
     # BART for survival analysis: Tommy John surgery recovery
 
     Tommy John surgery, ulnar collateral ligament reconstruction, is
@@ -21,35 +23,57 @@ def _(mo):
     shortening average return time; the top eight surgeons account for
     a third of all surgeries.
 
+    Tommy John surgery rebuilds the elbow's **ulnar collateral ligament
+    (UCL)**, the medial ligament that resists the valgus stress of high-
+    velocity throwing. When the UCL can no longer stabilize the joint,
+    surgeons typically harvest a tendon graft, drill tunnels in the
+    humerus and ulna, and thread the graft through those tunnels to
+    replace the torn ligament. The operation is named for Tommy John,
+    the pitcher who underwent Dr. Frank Jobe's first successful
+    professional-baseball UCL reconstruction in 1974; modern return-to-
+    competitive-throwing rehab still commonly runs 12--18 months.
+    """),
+            mo.image(
+                "images/ucl.webp",
+                alt="Diagram of elbow medial collateral ligament bundles and Tommy John UCL reconstruction with tendon graft threaded through humerus and ulna tunnels",
+                width="100%",
+                rounded=True,
+                caption="The UCL spans the medial elbow between humerus and ulna; reconstruction replaces the damaged ligament with a tendon graft routed through bone tunnels.",
+            ),
+            mo.md(r"""
     We model **discrete-time hazards**: at each integer month $t$
     post-surgery the return event occurs with probability
     $$h(t \mid x) = 1 - \exp\!\bigl(-\exp(g(t, x))\bigr),$$
     where $g$ is a sum of trees and the link is complementary log-log
-    (cloglog). The cloglog link is the discrete-time analogue of the
-    Cox proportional-hazards model: if $g$ were linear in $x$, the
-    hazard ratio between any two profiles would be constant in $t$.
-    BART makes $g$ a sum of trees instead, so the same likelihood can
-    represent time-varying hazard ratios. Each subject contributes
-    one row per month they remain at risk; the outcome is "did they
-    return this month?". That is exactly the binary classification
-    setup from notebook 3, applied to expanded person-time data.
-    Survival follows from the hazards:
+    (cloglog). Equivalently, the interval cumulative hazard is
+    $$\Lambda(t \mid x) = -\log\{1 - h(t \mid x)\} = \exp(g(t, x)).$$
+    The cloglog link is the discrete-time analogue of the Cox
+    proportional-hazards model: if $g$ were linear in $x$, the ratio of
+    interval cumulative hazards between any two profiles would be
+    constant in $t$. BART makes $g$ a sum of trees instead, so the same
+    likelihood can represent time-varying hazard ratios. Each subject
+    contributes one row per month they remain at risk; the outcome is
+    "did they return this month?". That is exactly the binary
+    classification setup from the classification notebook, applied to
+    expanded person-time data. Survival follows from the hazards:
     $$S(t \mid x) = \prod_{s \le t} \bigl(1 - h(s \mid x)\bigr).$$
 
     The notebook runs in two passes:
 
     1. **A synthetic warmup** with a known data-generating process.
-       The DGP is constructed to bake in a nonlinear age effect (knee
-       at age 30) and a non-proportional-hazards treatment effect
-       (HR(t) grows from 1 to 2 across the 36-month horizon) — both
-       structures a no-interaction linear cloglog GLM has no
-       parameters to fit. We fit BART and a cloglog GLM side by
+       The DGP is constructed to bake in a non-proportional-hazards
+       treatment effect (HR(t) steps from 1 to 2 to 3 across the
+       36-month horizon), a structure a no-interaction linear cloglog
+       GLM has no parameters to fit. We fit BART and a cloglog GLM side by
        side and verify the BART machinery recovers what we put in.
     2. **The real Tommy John data**, using the same machinery. Once
        we trust BART against a known truth, we use it as a flexible
        alternative to the standard Cox-PH-style analysis on real
        data whose true structure is unknown.
-    """)
+    """),
+        ],
+        gap=1,
+    )
     return
 
 
@@ -79,33 +103,39 @@ def _(mo):
     machinery end-to-end on a synthetic dataset where the truth is
     known. This is not a fair contest between BART and the cloglog
     GLM. The DGP below mirrors the real-data feature layout (person-
-    time discrete hazards on a 36-month horizon, 7 covariates) and
-    *deliberately* bakes in two effects that a no-interaction linear
-    cloglog GLM cannot represent at all:
+    time discrete hazards on a 36-month horizon, 7 covariates) but
+    keeps the signal deliberately simple: only the time block, revision
+    indicator, and their interaction matter.
 
-    1. **Nonlinear age effect with a knee at age 30.** No effect below
-       30; log-hazard increases by 0.05 per year above. A linear
-       predictor in `age` will smear this across the full range.
-    2. **Non-proportional-hazards treatment effect.** HR(t) starts at
-       1.0 at month 1 and grows to 2.0 by month 36, an interaction
-       between the treatment indicator and time. A GLM without a
-       time-by-treatment interaction term has no parameter to
-       represent it; the cloglog link forces a constant HR.
+    The non-proportional-hazards effect is about the **interval
+    cumulative hazard ratio**, not the baseline recovery-time shape.
+    For the reference profile, untreated subjects have interval hazard
+    $\Lambda_0(t)$; treated subjects have a three-step multiplier:
+    $\Lambda_1(t) / \Lambda_0(t) = 1$ for months 1--12,
+    $2$ for months 13--24, and $3$ for months 25--36. A GLM without a
+    time-by-treatment interaction term has no parameter to represent
+    that changing ratio; the cloglog PH form forces a constant HR.
 
-    Three other covariates carry weaker structure (era shift, surgeon
-    clustering, a fixed-effect multiplier on a 5-level surgeon
-    category). Two covariates (day-of-year, throws) are pure noise.
+    This warmup is intentionally a **balanced person-time risk set**:
+    we generate the same number of synthetic rows for every month and
+    revision status rather than simulating a full cohort and dropping
+    subjects after their first return. That is less realistic, but it is
+    the right design for a machinery check. It removes late-month risk-set
+    attrition, so the known non-PH signal is identifiable at every month.
+    The true contrast is deliberately piecewise-constant because BART is
+    a sum of trees; this is a machinery check, so the synthetic truth
+    should be recoverable rather than merely directionally suggestive.
 
-    Because the DGP is constructed to violate the GLM's linear-additive
-    assumption, the GLM is *guaranteed* to miss the time-varying HR
-    and the age knee. The question we're answering is therefore not
-    "which model wins" but "does the BART machinery recover what we
-    put in?" — specifically:
+    Age, year, day-of-year, throwing hand, and surgeon are included as
+    noise covariates solely to keep the same feature layout as the real
+    data. The question we're answering is therefore not "which model
+    wins" but "does the BART machinery recover what we put in?" —
+    specifically:
 
-    - `t`, treatment, age, and surgeon high in variable importance.
-    - throws and doy at the bottom.
-    - The growing HR(t) curve for treatment, traced cleanly against
-      the GLM's flat constant.
+    - time block and revision high in variable importance;
+    - noise covariates low;
+    - the stepwise HR(t) curve recovered by BART while the GLM stays flat
+      by construction.
 
     Once we trust the machinery against the known truth, we apply it
     to the real Tommy John data whose structure we do not know.
@@ -114,49 +144,79 @@ def _(mo):
 
 
 @app.cell
-def _(RANDOM_SEED, np, pmb):
-    # Synthetic DGP mirroring the real Tommy John feature layout: t,
-    # age, year, doy, throws, rev, surgeon. The hazard is built from a
-    # baseline shape h_0(t) (lognormal-style bell, peak ~0.08 around
-    # t=14) multiplied by per-covariate effects. Two of those effects
-    # violate the cloglog GLM's linear-additive assumption: the age
-    # knee at 30, and the treatment-by-time interaction.
+def _(RANDOM_SEED, np):
     def _baseline_hazard(t):
-        return 0.001 + 0.08 * np.exp(-0.5 * ((np.log(t) - np.log(14)) ** 2) / 0.4)
+        return 0.03 + 0.10 * np.exp(-0.5 * ((np.log(t) - np.log(18)) ** 2) / 0.55)
 
-    def simulate_survival(n_subjects=500, max_t=36, seed=0):
+    def simulate_balanced_person_time(n_per_cell=1000, max_t=36, seed=0):
         sim_rng = np.random.default_rng(seed)
-        age = sim_rng.uniform(20, 40, n_subjects)
-        year = sim_rng.uniform(1995, 2025, n_subjects)
-        doy = sim_rng.uniform(0, 1, n_subjects)
-        throws = sim_rng.integers(0, 2, n_subjects)
-        rev = (sim_rng.random(n_subjects) < 0.3).astype(int)
-        surgeon = sim_rng.integers(0, 5, n_subjects)
-        surgeon_mult = np.array([1.0, 0.7, 1.3, 0.9, 1.1])
 
         rows = []
-        for i in range(n_subjects):
-            age_eff = np.exp(max(0.0, age[i] - 30) * 0.05)
-            year_eff = np.exp(0.015 * (year[i] - 2010))
-            surg_eff = surgeon_mult[surgeon[i]]
-            for t in range(1, max_t + 1):
-                base = _baseline_hazard(t)
-                treat_eff = 1.0 + rev[i] * t / max_t
-                h = min(base * age_eff * year_eff * surg_eff * treat_eff, 0.99)
-                event = int(sim_rng.random() < h)
-                rows.append(
-                    (t, age[i], year[i], doy[i], throws[i], rev[i], surgeon[i], event)
-                )
-                if event == 1:
-                    break
-        arr = np.array(rows, dtype=float)
-        return arr[:, :7], arr[:, 7].astype(int)
+        for t in range(1, max_t + 1):
+            base_lambda = _baseline_hazard(t)
+            if t <= 12:
+                t_block = 0
+            elif t <= 24:
+                t_block = 1
+            else:
+                t_block = 2
+            for rev_value in [0, 1]:
+                for _row in range(n_per_cell):
+                    age = sim_rng.uniform(20, 40)
+                    year = sim_rng.uniform(1995, 2025)
+                    doy = sim_rng.uniform(0, 1)
+                    throws = sim_rng.integers(0, 2)
+                    surgeon = sim_rng.integers(0, 5)
 
-    sim_X, sim_y = simulate_survival(n_subjects=500, max_t=36, seed=RANDOM_SEED)
-    sim_q_idx = ((sim_X[:, 0].astype(int) - 1) // 3).astype(int)
-    # GLM design matrix for the synthetic data: standardize age and year,
-    # binarize throws / rev, dummy-code the 5-level surgeon (reference =
-    # level 0). doy passes through as the [0, 1] noise feature.
+                    age_eff = 1.0
+                    year_eff = 1.0
+                    surg_eff = 1.0
+                    if t <= 12:
+                        true_interval_hr = 1.0
+                    elif t <= 24:
+                        true_interval_hr = 2.0
+                    else:
+                        true_interval_hr = 3.0
+                    treat_eff = 1.0 if rev_value == 0 else true_interval_hr
+                    interval_hazard = (
+                        base_lambda * age_eff * year_eff * surg_eff * treat_eff
+                    )
+                    h = 1.0 - np.exp(-interval_hazard)
+                    event = int(sim_rng.random() < h)
+                    rows.append(
+                        (t, t_block, age, year, doy, throws, rev_value, surgeon, event)
+                    )
+
+        arr = np.array(rows, dtype=float)
+        sim_t = arr[:, 0].astype(int)
+        return sim_t, arr[:, 1:8], arr[:, 8].astype(int)
+
+    sim_t, sim_X, sim_y = simulate_balanced_person_time(
+        n_per_cell=1000, max_t=36, seed=RANDOM_SEED
+    )
+    sim_q_idx = ((sim_t - 1) // 3).astype(int)
+    f"sim_X shape {sim_X.shape}, events {int(sim_y.sum())}"
+    return sim_X, sim_q_idx, sim_y
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    The GLM comparator needs a conventional design matrix: standardized
+    `age` and `year`, the binary indicators as-is, K−1 dummies for the
+    5-level surgeon category (reference = level 0), and `doy` passing
+    through as the [0, 1] noise feature; its time baseline enters
+    separately through the quarterly `sim_q_idx`. BART instead takes the
+    raw covariate matrix, with `split_rules` assigning each column the
+    right tree geometry: subset splits for the 3-level time block and
+    the surgeon category, continuous splits for `age`/`year`/`doy`, and
+    one-hot splits for the binary `throws` and `rev`.
+    """)
+    return
+
+
+@app.cell
+def _(np, pmb, sim_X):
     sim_age_mean, sim_age_sd = sim_X[:, 1].mean(), sim_X[:, 1].std()
     sim_year_mean, sim_year_sd = sim_X[:, 2].mean(), sim_X[:, 2].std()
 
@@ -176,54 +236,62 @@ def _(RANDOM_SEED, np, pmb):
         ]
     )
     sim_split_rules = (
-        [pmb.ContinuousSplitRule] * 4
+        [pmb.SubsetSplitRule]
+        + [pmb.ContinuousSplitRule] * 3
         + [pmb.OneHotSplitRule] * 2
         + [pmb.SubsetSplitRule]
     )
-    f"sim_X shape {sim_X.shape}, events {int(sim_y.sum())}, sim_X_glm cols {sim_X_glm.shape[1]}"
+    f"sim_X_glm cols {sim_X_glm.shape[1]}"
     return (
-        sim_X,
         sim_X_glm,
         sim_age_mean,
         sim_age_sd,
-        sim_q_idx,
         sim_split_rules,
-        sim_y,
         sim_year_mean,
         sim_year_sd,
     )
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    Both models now fit the same simulated person-time rows. The BART
+    fit uses warmup-scale settings — `m=20` trees and 300 draws on 2
+    chains, versus `m=100` and full-length chains on the real data —
+    enough to verify that the known signal is recoverable. The cloglog
+    GLM has no treatment-by-time interaction term, so it is structurally
+    incapable of representing the non-PH treatment effect baked into the
+    DGP; that structural limitation is exactly what BART relaxes.
+    """)
+    return
+
+
 @app.cell
 def _(RANDOM_SEED, pm, pmb, sim_X, sim_split_rules, sim_y):
-    # Synthetic BART fit. m=50 (instead of the 100 we use on real
-    # data) gives a faster fit appropriate for a warmup demo; the
-    # synthetic dataset is small enough that 50 trees suffice. The
-    # PGBART step config (num_particles, batch) matches the real fit.
     with pm.Model() as model_sim_bart:
         X_sim_data = pm.Data("X_sim_data", sim_X)
         eta_sim = pmb.BART(
             "eta_sim",
             X=X_sim_data,
             Y=sim_y.astype(float),
-            m=50,
+            m=20,
             split_rules=sim_split_rules,
         )
         h_sim = pm.Deterministic("h_sim", 1.0 - pm.math.exp(-pm.math.exp(eta_sim)))
         pm.Bernoulli("event_sim", p=h_sim, observed=sim_y, shape=h_sim.shape)
         idata_sim_bart = pm.sample(
+            draws=300,
+            tune=300,
+            chains=2,
+            cores=1,
             random_seed=RANDOM_SEED,
-            step=pmb.PGBART(vars=[eta_sim], num_particles=20, batch=(0.1, 0.15)),
+            step=pmb.PGBART(vars=[eta_sim], num_particles=10, batch=(0.1, 0.15)),
         )
     return idata_sim_bart, model_sim_bart
 
 
 @app.cell
 def _(RANDOM_SEED, pm, sim_X_glm, sim_q_idx, sim_y):
-    # Synthetic GLM (cloglog discrete-time PH) on the same person-time
-    # expansion. No treatment-by-time interaction term, so the model is
-    # structurally incapable of representing the non-PH treatment effect
-    # baked into the DGP. That structural failure is what BART corrects.
     with pm.Model() as model_sim_glm:
         X_sim_glm_data = pm.Data("X_sim_glm_data", sim_X_glm)
         sim_q_idx_data = pm.Data("sim_q_idx_data", sim_q_idx, dims="row")
@@ -242,12 +310,22 @@ def _(RANDOM_SEED, pm, sim_X_glm, sim_q_idx, sim_y):
     return idata_sim_glm, model_sim_glm
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    To read off HR(t), we build a treatment contrast: two 36-month
+    profile sweeps at `rev=0` and `rev=1`, all other covariates pinned
+    at reference values. Each profile is encoded twice — once in the raw
+    BART design (with each month mapped to its time block) and once in
+    the standardized GLM design — so each model's posterior predictive
+    can be evaluated at the same pair of profiles and the interval
+    hazard ratio computed draw by draw.
+    """)
+    return
+
+
 @app.cell
 def _(np, sim_age_mean, sim_age_sd, sim_year_mean, sim_year_sd):
-    # Treatment contrast profiles: 36-row sweeps at rev=0 vs rev=1,
-    # all other covariates pinned at synthetic-data medians. The same
-    # pair of profiles is encoded for BART and GLM so we can read off
-    # HR(t) from each posterior predictive.
     sim_times = np.arange(1, 37)
     sim_ref = dict(age=30.0, year=2010.0, doy=0.5, throws=0, surgeon=0)
 
@@ -255,7 +333,7 @@ def _(np, sim_age_mean, sim_age_sd, sim_year_mean, sim_year_sd):
         n = len(sim_times)
         return np.column_stack(
             [
-                sim_times,
+                np.select([sim_times <= 12, sim_times <= 24], [0, 1], default=2),
                 np.full(n, sim_ref["age"]),
                 np.full(n, sim_ref["year"]),
                 np.full(n, sim_ref["doy"]),
@@ -332,16 +410,23 @@ def _(mo):
     The figure below compares three things at the treatment contrast
     (rev=1 vs rev=0):
 
-    - **True HR(t)** (black dashed) = `1 + t/36` by construction.
+    - **True interval HR(t)** (black dashed) = 1, 2, then 3 by
+      construction. This is the ratio of interval cumulative hazards,
+      not the raw event probability.
     - **BART** (blue, with 90% CrI) reads HR(t) from its posterior
       predictive at the two profiles.
     - **Cloglog GLM** (red) reads `exp(beta_rev)` from the linear
       coefficient, a single number constant in t.
 
-    A well-functioning BART fit traces the true curve closely. A
-    well-functioning GLM lands somewhere near the *average* of the true
-    HR over t (about 1.5), which is what a no-interaction PH model
-    should do.
+    A proportional-hazards model would make the rev=1 and rev=0
+    interval cumulative hazards differ by one constant multiplier at
+    every month, so the HR curve would be flat. Here the two profiles
+    share the same broad baseline recovery shape, but their **interval
+    hazard ratio** changes by month block; that is what makes the DGP
+    non-proportional. A well-functioning BART fit should recover the
+    step pattern within posterior uncertainty. A well-functioning GLM
+    lands near the average of the three true HR levels, which is what a
+    no-interaction PH model should do.
     """)
     return
 
@@ -363,8 +448,15 @@ def _(np, plt, pp_sim_bart, pp_sim_glm, sim_times):
     _glm_rev0 = _h_sim_glm[:_n_t, :].T
     _glm_rev1 = _h_sim_glm[_n_t : 2 * _n_t, :].T
 
-    _bart_hr = _bart_rev1 / np.clip(_bart_rev0, 1e-9, None)
-    _glm_hr = _glm_rev1 / np.clip(_glm_rev0, 1e-9, None)
+    def _interval_hazard(_h):
+        return -np.log1p(-np.clip(_h, 0.0, 1.0 - 1e-12))
+
+    _bart_lambda0 = _interval_hazard(_bart_rev0)
+    _bart_lambda1 = _interval_hazard(_bart_rev1)
+    _glm_lambda0 = _interval_hazard(_glm_rev0)
+    _glm_lambda1 = _interval_hazard(_glm_rev1)
+    _bart_hr = _bart_lambda1 / np.clip(_bart_lambda0, 1e-12, None)
+    _glm_hr = _glm_lambda1 / np.clip(_glm_lambda0, 1e-12, None)
     _bart_med, (_bart_lo, _bart_hi) = (
         np.median(_bart_hr, axis=0),
         np.quantile(_bart_hr, [0.05, 0.95], axis=0),
@@ -373,7 +465,7 @@ def _(np, plt, pp_sim_bart, pp_sim_glm, sim_times):
         np.median(_glm_hr, axis=0),
         np.quantile(_glm_hr, [0.05, 0.95], axis=0),
     )
-    _true_hr = 1.0 + sim_times / 36
+    _true_hr = np.select([sim_times <= 12, sim_times <= 24], [1.0, 2.0], default=3.0)
 
     _fig_sim, _ax_sim = plt.subplots(figsize=(9, 5))
     _ax_sim.fill_between(
@@ -405,12 +497,14 @@ def _(np, plt, pp_sim_bart, pp_sim_glm, sim_times):
         color="black",
         linewidth=2,
         linestyle="--",
-        label="True HR(t) = 1 + t/36",
+        label="True interval HR(t): 1 → 2 → 3",
     )
     _ax_sim.axhline(1.0, color="gray", linewidth=0.8, linestyle=":")
     _ax_sim.set_xlabel("months since surgery")
-    _ax_sim.set_ylabel("HR(t) = h(t | rev=1) / h(t | rev=0)")
-    _ax_sim.set_title("Recovery of a non-proportional hazard from synthetic data")
+    _ax_sim.set_ylabel(r"HR$(t)$ = $\Lambda(t | rev=1) / \Lambda(t | rev=0)$")
+    _ax_sim.set_title(
+        "Recovery of a non-proportional interval hazard from synthetic data"
+    )
     _ax_sim.legend(frameon=False, loc="upper left")
     _fig_sim.tight_layout()
     _fig_sim
@@ -420,30 +514,42 @@ def _(np, plt, pp_sim_bart, pp_sim_glm, sim_times):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
+    This is the behavior we want from a synthetic machinery check. The
+    dashed line is the **known interval cumulative hazard ratio** baked
+    into the DGP, not the month-specific event probability itself. Because
+    the warmup uses a balanced person-time risk set and a tree-friendly
+    step-function truth, BART should recover the main step pattern rather
+    than merely show the correct direction. The cloglog GLM is expected
+    to be flat because its no-interaction PH specification can only
+    estimate one average rev effect over all months. That flat red line
+    is the expected failure mode of the comparator, not a sampling bug.
+
     ## Now to the real data
 
     With the machinery validated on a known DGP, we apply the same
     discrete-time hazard BART (and its cloglog GLM comparator) to the
     Roegele Tommy John surgery list.
+
+    We keep all professional levels and all positions (not just MLB
+    pitchers), so BART sees the full range of recovery trajectories
+    Roegele compiled; the broader population is what makes Roegele's
+    descriptive table show the nonlinear age effect, and the MLB-only
+    subset is too narrow to recover it. Surgeries are restricted to
+    1990--2022, a handful of `throws` records (`R*`, `P`, `L/R`) are
+    dropped as data-entry artifacts, and a 36-month administrative
+    horizon is imposed: anyone still not returned by then is censored
+    at $t = 36$.
+
+    A deterministic subsample to 500 subjects keeps the person-month
+    expansion to roughly 12k rows and the live-tutorial BART fit to
+    roughly 6 minutes. The seed is fixed so attendees see the same
+    numbers we do.
     """)
     return
 
 
 @app.cell
 def _(RANDOM_SEED, pl):
-    # Load Roegele's surgery list. We keep all professional levels and
-    # all positions (not just MLB pitchers), so BART sees the full range
-    # of recovery trajectories Roegele compiled. A 36-month
-    # administrative horizon: anyone still not returned by then is
-    # censored at t=36. The broader population is what makes Roegele's
-    # descriptive table show the nonlinear age effect; the MLB-only
-    # subset is too narrow to recover it. A handful of throws records
-    # (R*, P, L/R) are dropped as data-entry artifacts.
-    #
-    # Deterministic subsample to 500 subjects keeps the person-month
-    # expansion to roughly 12k rows and the live-tutorial BART fit to
-    # roughly 6 minutes. Random_state fixed so attendees see the same
-    # numbers we do.
     HORIZON = 36.0
     SUBSAMPLE_N = 500
     tj_df = (
@@ -502,18 +608,32 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Expanding to person-month format
+
+    The model sees a long-format expansion of the subject table: each
+    subject contributes one row per integer month they remain at risk,
+    ending in a final row where they either return (`y=1`) or are
+    censored (`y=0`). The discrete time index `t` goes in column 0 of
+    `X`, so BART can split on it and learn the hazard's time shape
+    jointly with the covariate effects rather than imposing a
+    parametric baseline.
+
+    Categorical columns are integer-coded against sorted level lists
+    that we keep around, so prediction profiles later encode levels by
+    name (`surgeon_levels.index(...)`) rather than hardcoding codes.
+    `split_rules` assigns each column the right tree geometry:
+    continuous splits for `t`/`age`/`year`/`doy`, one-hot for the
+    binary `throws` and `revision`, and subset splits for the 10-level
+    surgeon group.
+    """)
+    return
+
+
 @app.cell
 def _(np, pmb, tj_df):
-    # Long-format expansion: each subject contributes one row per
-    # integer month they remain at risk, ending in a final row in
-    # which they either return (y=1) or are censored (y=0). The
-    # discrete time index t goes in column 0 of X; BART can split on
-    # it to learn the hazard's time shape jointly with covariate
-    # effects rather than imposing a parametric baseline.
-    #
-    # Categorical encoding via sorted np.unique-style lookups: keep
-    # the level ordering around so prediction profiles encode by name
-    # (surgeon_levels.index("Andrews")) rather than hardcoding codes.
     surgeon_levels = sorted(tj_df["surgeon_group"].unique().to_list())
     throws_levels = sorted(tj_df["throws"].unique().to_list())
     surgeon_code = {s: i for i, s in enumerate(surgeon_levels)}
@@ -574,13 +694,15 @@ def _(mo):
     Two choices for the link function carry different assumptions.
     With a **complementary log-log** link,
     $$h(t \mid x) \;=\; 1 - \exp\!\bigl(-\exp(\alpha_t + x^\top \beta)\bigr),$$
-    the discrete-time hazard ratio between any two profiles is exactly
-    $\exp(\beta^\top (x_1 - x_2))$, constant over $t$. This is the
-    discrete-time form of the Cox proportional hazards model. It is the
-    only link in discrete time that yields strictly proportional hazards,
-    which is the assumption Cox PH famously imposes.
+    the interval cumulative hazard is
+    $$\Lambda(t \mid x) = -\log\{1 - h(t \mid x)\} = \exp(\alpha_t + x^\top \beta).$$
+    The ratio $\Lambda(t \mid x_1) / \Lambda(t \mid x_2)$ is exactly
+    $\exp\{\beta^\top (x_1 - x_2)\}$, constant over $t$. This is the
+    discrete-time form of the Cox proportional hazards model. The raw
+    event-probability ratio $h(t \mid x_1) / h(t \mid x_2)$ is only
+    approximately the same when monthly hazards are small.
 
-    We give the baseline hazard $\alpha_t$ twelve degrees of freedom
+    We give the baseline log-interval-hazard $\alpha_t$ twelve degrees of freedom
     (one log-hazard per quarter, $t \in \{1\text{-}3, 4\text{-}6, \ldots, 34\text{-}36\}$),
     which is plenty of flexibility on the time axis. Any remaining
     disagreement with BART will then be honestly about the covariate
@@ -593,18 +715,22 @@ def _(mo):
     hazards would hold there too; any time-varying hazard ratio we
     recover is unambiguously a consequence of the tree-sum function
     class, not the link.
+
+    Concretely, the design matrix below standardizes the continuous
+    covariates, passes the binary indicators through, and dummy-codes
+    the surgeon category with the largest group (Dr. James Andrews) as
+    the reference. The quarter index `q_idx` is carried separately so
+    the baseline log-hazard $\alpha_q$ can be a 12-vector indexed at
+    row level rather than a 12-column dummy block in the matrix. Each
+    $\beta_j$ is then interpretable as a log hazard ratio that applies
+    at every $t$ by construction. Because this model contains no BART
+    variable, `pm.sample` uses NUTS.
     """)
     return
 
 
 @app.cell
 def _(np, surgeon_levels, surv_X):
-    # Wide design matrix for the cloglog GLM comparator: standardized
-    # continuous covariates, raw binary indicators, K-1 surgeon dummies
-    # with the largest group (Andrews) as the reference category. The
-    # quarter index q_idx is carried separately so the baseline log-hazard
-    # alpha_q[q_idx] can be a 12-vector indexed at the row level rather
-    # than a 12-column dummy block in the matrix.
     _t_col = surv_X[:, 0].astype(int)
     q_idx = ((_t_col - 1) // 3).astype(int)
 
@@ -647,12 +773,6 @@ def _(np, surgeon_levels, surv_X):
 
 @app.cell
 def _(RANDOM_SEED, pm, q_idx, surv_X_glm, surv_y):
-    # Cloglog discrete-time hazard GLM: same Bernoulli likelihood on the
-    # person-month expansion as the BART model, but the linear predictor
-    # is alpha_q[q_idx] + X_glm @ beta and the link is cloglog. Each
-    # beta_j is interpretable as a log hazard ratio that applies at every
-    # t by construction. NUTS auto-registers since this model has no BART
-    # RV.
     with pm.Model() as model_glm:
         X_glm_data = pm.Data("X_glm_data", surv_X_glm)
         q_idx_data = pm.Data("q_idx_data", q_idx, dims="row")
@@ -713,16 +833,6 @@ def _(mo):
 
 @app.cell
 def _(RANDOM_SEED, pm, pmb, split_rules, surv_X, surv_y):
-    # Cloglog BART on the person-month expansion: each row asks "did
-    # this subject return this month?". The hazard is
-    # 1 - exp(-exp(eta)), so the link matches the GLM comparator and
-    # the BART-vs-GLM contrast is purely about the function class on
-    # eta (tree sum vs linear). The first column of X is the month
-    # index t, so BART learns the hazard shape h(t, x) jointly with
-    # covariate effects rather than imposing a parametric baseline.
-    # split_rules wires the encoded categoricals to the right tree
-    # geometry: continuous for t/age/year/doy, OneHot for binary
-    # throws and revision, Subset for the 10-level surgeon group.
     with pm.Model() as model_surv:
         X_data = pm.Data("X_data", surv_X)
         eta = pmb.BART(
@@ -741,6 +851,57 @@ def _(RANDOM_SEED, pm, pmb, split_rules, surv_X, surv_y):
     return eta, idata_surv, model_surv
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    The same convergence checks as the GLM, adapted to the BART fit:
+    `az.plot_convergence_dist` shows the distributions of R-hat and ESS
+    across the elements of the latent `eta`. Divergences are an
+    HMC-specific diagnostic; PGBART is the only step method in this
+    model, so the divergence count does not apply.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(az, idata_surv):
+    az.plot_convergence_dist(idata_surv, var_names=["eta"])
+    return
+
+
+@app.cell
+def _(idata_surv):
+    _stats = idata_surv.sample_stats
+    (
+        f"divergences: {int(_stats['diverging'].sum())}"
+        if "diverging" in _stats
+        else "PGBART-only model (no HMC step); divergence diagnostic not applicable"
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Covariate contrast profiles
+
+    To see what the two fits imply, we evaluate both posteriors at a
+    grid of covariate profiles. The reference profile holds each
+    covariate at its training-data mode or median for the broadened
+    (all-levels, all-positions) population: age 22, surgery year 2012,
+    mid-season date, right-handed, first surgery, Dr. James Andrews.
+    Each panel below sweeps one covariate while pinning the rest at the
+    reference values; the age contrast uses {20, 30, 40} since the data
+    spans ages 13--47.
+
+    Every profile is encoded twice — `X_profiles` in the raw 7-column
+    BART design and `X_profiles_glm` in the wide GLM design — and
+    `q_idx_profiles` maps each profile row to its quarter for the
+    GLM's $\alpha_q$ baseline.
+    """)
+    return
+
+
 @app.cell
 def _(
     age_mean_glm,
@@ -752,17 +913,6 @@ def _(
     year_mean_glm,
     year_sd_glm,
 ):
-    # Reference profile holds covariates at their training-data modes /
-    # medians for the broadened (all-levels, all-positions) population:
-    # age 22, surgery year 2012, mid-season DOY, right-handed, first
-    # surgery, Andrews. Each panel below sweeps one covariate while
-    # pinning the rest at the reference values. Age contrast widened
-    # to {20, 30, 40} now that the data spans 13-47.
-    #
-    # Two parallel encodings of every profile: X_profiles in the raw
-    # 7-column BART design, and X_profiles_glm in the wide GLM design
-    # (standardized continuous, surgeon dummies). q_idx_profiles maps
-    # each row to its quarter for the alpha_q baseline.
     AGE_REF = 22
     YEAR_REF = 2012
     DOY_REF = 0.4
@@ -803,7 +953,6 @@ def _(
             ]
         )
 
-    # Reference args for every profile, varying one covariate at a time.
     _specs = {
         "age_20": (20, YEAR_REF, DOY_REF, THROWS_R, REV_REF, SURG_REF),
         "age_30": (30, YEAR_REF, DOY_REF, THROWS_R, REV_REF, SURG_REF),
@@ -843,11 +992,8 @@ def _(RANDOM_SEED, X_profiles, idata_surv, model_surv, pm):
 
 @app.cell
 def _(RANDOM_SEED, X_profiles_glm, idata_glm, model_glm, pm, q_idx_profiles):
-    # GLM posterior predictive at the same profiles. The cloglog hazard
     # h_glm is a Deterministic of (alpha_q, beta), so var_names=["h_glm"]
-    # returns posterior draws of the per-row hazard with no additional
-    # Bernoulli sampling step. q_idx_data is re-attached alongside the
-    # design matrix so alpha_q[q_idx] picks the right baseline.
+    # yields hazard draws directly; q_idx_data must be re-attached too.
     with model_glm:
         pm.set_data({"X_glm_data": X_profiles_glm, "q_idx_data": q_idx_profiles})
         pp_glm = pm.sample_posterior_predictive(
@@ -859,14 +1005,24 @@ def _(RANDOM_SEED, X_profiles_glm, idata_glm, model_glm, pm, q_idx_profiles):
     return (pp_glm,)
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    From hazard draws to survival curves: each profile contributes 36
+    consecutive rows of the posterior predictive, which are sliced out
+    and accumulated via $S(t) = \prod_{s \le t} (1 - h(s))$ — once for
+    the BART draws and once for the GLM draws. As a no-covariate
+    reference, a marginal Kaplan-Meier curve computed from the
+    subject-level data (empirical per-month hazard, no model) is
+    overlaid as a dotted gray line on every panel; the
+    covariate-stratified curves should bracket it in the aggregate.
+    """)
+    return
+
+
 @app.cell
 def _(np, pp_glm, pp_surv, profile_names, times):
-    # .stack(sample=("chain","draw")) flattens chain x draw into a
-    # single sample dimension. Each profile contributes len(times)
-    # consecutive rows; slice them out, transpose so draws are the row
-    # axis, then accumulate hazards via S(t) = prod_{s<=t}(1 - h(s)).
-    # Build the same curves twice: from the BART posterior-predictive h
-    # draws and from the GLM posterior-predictive h_glm draws.
+    # stack(sample=("chain", "draw")) flattens chain x draw into one axis.
     _h_draws = pp_surv.predictions["h"].stack(sample=("chain", "draw")).values
     _h_glm_draws = pp_glm.predictions["h_glm"].stack(sample=("chain", "draw")).values
     _n_t = len(times)
@@ -886,11 +1042,6 @@ def _(np, pp_glm, pp_surv, profile_names, times):
 
 @app.cell
 def _(np, tj_df):
-    # Marginal Kaplan-Meier from the subject-level data: empirical
-    # per-bin hazard events_t / at_risk_t, then S(t) = prod(1 - h).
-    # No covariate adjustment. Serves as a no-covariate baseline that
-    # each panel below overlays as a gray dashed reference; BART's
-    # stratified curves should bracket it in the aggregate.
     def km_survival(time_months, event, max_t=36):
         t_bin = np.maximum(1, np.ceil(time_months)).astype(int)
         h = np.zeros(max_t)
@@ -1095,14 +1246,15 @@ def _(mo):
     ### Does the proportional-hazards assumption hold?
 
     The headline pitch for nonparametric survival models like BART is
-    that they do **not** assume the hazard ratio between two covariate
-    profiles is constant over time. The cloglog GLM does: by
-    construction, the discrete-time cloglog model gives a hazard ratio
-    of $\exp(\beta^\top (x_1 - x_2))$, the same at every $t$.
+    that they do **not** assume the interval cumulative hazard ratio
+    between two covariate profiles is constant over time. The cloglog
+    GLM does: by construction, the discrete-time cloglog model gives
+    $\Lambda(t \mid x_1) / \Lambda(t \mid x_2) = \exp\{\beta^\top (x_1 - x_2)\}$,
+    the same at every $t$.
 
     The plot below contrasts the two on a single comparison: 40-year-old
     vs 20-year-old pitcher, all other covariates pinned at the
-    reference. The GLM line is flat (its HR is `exp(beta_age * 20 /
+    reference. The GLM line is flat (its interval HR is `exp(beta_age * 20 /
     sd_age)`); BART's ribbon is allowed to be a curve. If the ribbon
     stays inside the GLM band, proportional hazards approximately holds
     for this contrast. If it drifts up or down as $t$ grows, BART has
@@ -1113,7 +1265,12 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(age_sd_glm, h_curves, idata_glm, np, plt, times):
-    _bart_hr_draws = h_curves["age_40"] / np.clip(h_curves["age_20"], 1e-9, None)
+    def _interval_hazard_ratio(_h_num, _h_den):
+        _lambda_num = -np.log1p(-np.clip(_h_num, 0.0, 1.0 - 1e-12))
+        _lambda_den = -np.log1p(-np.clip(_h_den, 0.0, 1.0 - 1e-12))
+        return _lambda_num / np.clip(_lambda_den, 1e-12, None)
+
+    _bart_hr_draws = _interval_hazard_ratio(h_curves["age_40"], h_curves["age_20"])
     _bart_hr_med = np.median(_bart_hr_draws, axis=0)
     _bart_hr_lo, _bart_hr_hi = np.quantile(_bart_hr_draws, [0.05, 0.95], axis=0)
 
@@ -1143,31 +1300,16 @@ def _(age_sd_glm, h_curves, idata_glm, np, plt, times):
     _ax_hr.axhspan(_glm_hr_lo, _glm_hr_hi, color="#c44e52", alpha=0.12)
     _ax_hr.axhline(1.0, color="gray", linewidth=0.8, linestyle=":")
     _ax_hr.set_xlabel("months since surgery")
-    _ax_hr.set_ylabel(r"HR$(t)$ = $h(t|\text{age}=40) / h(t|\text{age}=20)$")
+    _ax_hr.set_ylabel(
+        r"HR$(t)$ = $\Lambda(t|\text{age}=40) / \Lambda(t|\text{age}=20)$"
+    )
     _ax_hr.set_title(
-        f"Time-varying hazard ratio: 40 vs 20\ncloglog GLM HR = {_glm_hr_med:.2f} (90% CrI [{_glm_hr_lo:.2f}, {_glm_hr_hi:.2f}])"
+        f"Time-varying interval hazard ratio: 40 vs 20\ncloglog GLM HR = {_glm_hr_med:.2f} (90% CrI [{_glm_hr_lo:.2f}, {_glm_hr_hi:.2f}])"
     )
     _ax_hr.legend(frameon=False, loc="upper left")
     _fig_hr.tight_layout()
     _fig_hr
     return
-
-
-@app.cell
-def _(RANDOM_SEED, idata_surv, model_surv, pm, surv_X):
-    # Full posterior-predictive event draws at the training rows.
-    # Reattach X_data to surv_X (it was last set to X_profiles for the
-    # profile-level PP). sample_vars=["eta"] is required for pymc-bart
-    # under pm.sample_posterior_predictive.
-    with model_surv:
-        pm.set_data({"X_data": surv_X})
-        pp_train = pm.sample_posterior_predictive(
-            idata_surv,
-            var_names=["event"],
-            sample_vars=["eta"],
-            random_seed=RANDOM_SEED,
-        )
-    return (pp_train,)
 
 
 @app.cell(hide_code=True)
@@ -1190,6 +1332,21 @@ def _(mo):
     contrast panels would not surface.
     """)
     return
+
+
+@app.cell
+def _(RANDOM_SEED, idata_surv, model_surv, pm, surv_X):
+    # Re-attach X_data to the training rows (it was last set to
+    # X_profiles); sample_vars=["eta"] is required for pymc-bart.
+    with model_surv:
+        pm.set_data({"X_data": surv_X})
+        pp_train = pm.sample_posterior_predictive(
+            idata_surv,
+            var_names=["event"],
+            sample_vars=["eta"],
+            random_seed=RANDOM_SEED,
+        )
+    return (pp_train,)
 
 
 @app.cell(hide_code=True)
@@ -1355,11 +1512,23 @@ def _(
 
 
 @app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Partial dependence
+
+    Partial dependence plots show the marginal effect of each feature
+    on the latent log interval hazard, averaging the tree-sum
+    prediction over the observed values of the remaining features.
+    `var_discrete=[0, 4, 5, 6]` marks the integer-coded `t`, `throws`,
+    `revision`, and `surgeon` columns so they render as ticks rather
+    than smooth curves; `age`, `surgery_year`, and `surgery_doy_frac`
+    stay continuous.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
 def _(eta, model_surv, pm, pmb, surv_X, surv_y):
-    # var_discrete=[0, 4, 5, 6]: time t, throws, revision, surgeon
-    # are integer-coded so PDP renders them as ticks rather than
-    # smooth curves. age, surgery_year, surgery_doy_frac stay
-    # continuous.
     with model_surv:
         pm.set_data({"X_data": surv_X})
         pmb.plot_pdp(
@@ -1413,23 +1582,6 @@ def _(RANDOM_SEED, eta, model_surv, pm, pmb, surv_X, surv_y):
             centered=True,
             random_seed=RANDOM_SEED,
         )
-    return
-
-
-@app.cell(hide_code=True)
-def _(az, idata_surv):
-    az.plot_convergence_dist(idata_surv, var_names=["eta"])
-    return
-
-
-@app.cell
-def _(idata_surv):
-    _stats = idata_surv.sample_stats
-    (
-        f"divergences: {int(_stats['diverging'].sum())}"
-        if "diverging" in _stats
-        else "PGBART-only model (no HMC step); divergence diagnostic not applicable"
-    )
     return
 
 

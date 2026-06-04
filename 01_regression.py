@@ -470,9 +470,9 @@ def _(mo):
     ### Partial dependence
 
     `pmb.plot_pdp` shows the marginal effect of each covariate, integrating
-    the other features out over their empirical distribution. See notebook
-    01's "Partial dependence and ICE" section for the from-scratch
-    derivation; here it's a one-liner against the fitted BART RV.
+    the other features out over their empirical distribution. See
+    `slides/how_bart_works.py`'s "Partial dependence and ICE" section for the
+    from-scratch derivation; here it's a one-liner against the fitted BART RV.
     """)
     return
 

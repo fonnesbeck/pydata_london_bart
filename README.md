@@ -12,13 +12,14 @@ Basic familiarity with Python and the basic scientific stack. Undergraduate-leve
 
 ## Outline
 
-The tutorial is delivered as four marimo notebooks:
+The tutorial is delivered as one slide-source notebook plus three hands-on
+application notebooks:
 
-- **`01_how_bart_works.py` — How BART works (25 min):** Bayesian inference and MCMC primer; sum-of-weak-trees; regularization priors that prevent overfitting; posterior inference over tree structures; why this gives calibrated uncertainty. Built bottom-up in pure NumPy so the sampler reads top-to-bottom.
+- **`slides/how_bart_works.py` — How BART works (25 min):** Bayesian inference and MCMC primer; sum-of-weak-trees; regularization priors that prevent overfitting; posterior inference over tree structures; why this gives calibrated uncertainty. Built bottom-up in pure NumPy so the sampler reads top-to-bottom.
 - **Break (5 min)**
-- **`02_regression.py` — BART for regression (25 min, hands-on):** Fitting a first model with `pymc-bart`; visualizing posterior predictive distributions with HDI bands; variable importance with uncertainty; partial dependence plots; diagnostics. 2024 Formula 1 lap times across five Grands Prix (Bahrain, Monaco, Spain, Britain, Monza).
-- **`03_classification.py` — BART for classification (15 min, hands-on):** Predicted probabilities with uncertainty (not just class labels); calibration; when BART outperforms logistic regression. Synthetic binary outcome and GSS 2022 ordered probit.
-- **`04_survival.py` — BART for survival analysis (15 min, hands-on):** Time-to-event data and censoring; survival curves with credible intervals; individualized risk assessment.
+- **`01_regression.py` — BART for regression (25 min, hands-on):** Fitting a first model with `pymc-bart`; visualizing posterior predictive distributions with HDI bands; variable importance with uncertainty; partial dependence plots; diagnostics. 2024 Formula 1 lap times across five Grands Prix (Bahrain, Monaco, Spain, Britain, Monza).
+- **`02_classification.py` — BART for classification (15 min, hands-on):** Predicted probabilities with uncertainty (not just class labels); calibration; when BART outperforms logistic regression. GSS 2022 life satisfaction as binary probit and ordered probit.
+- **`03_survival.py` — BART for survival analysis (15 min, hands-on):** Time-to-event data and censoring; survival curves with credible intervals; individualized risk assessment.
 - **Wrap-up (5 min):** When to use BART vs. alternatives; resources for further learning
 
 
@@ -26,8 +27,8 @@ The tutorial is delivered as four marimo notebooks:
 
 ```bash
 pixi install                                      # first-time setup
-pixi run marimo edit 01_how_bart_works.py         # author / teach in the browser
-pixi run marimo check 0X_*.py                     # structural validation
+pixi run marimo edit 01_regression.py              # author / teach in the browser
+pixi run marimo check 0[1-3]_*.py slides/how_bart_works.py  # structural validation
 ```
 
 

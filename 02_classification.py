@@ -239,7 +239,7 @@ def _(mo):
 
     We wrap the design matrix in `pm.Data` so we can swap in the held-out
     respondents for prediction without rebuilding the model — see the "PyMC
-    patterns for prediction" aside in notebook 02 for `set_data` /
+    patterns for prediction" aside in `01_regression.py` for `set_data` /
     `sample_posterior_predictive`.
     """)
     return
