@@ -17,9 +17,9 @@ application notebooks:
 
 - **`slides/how_bart_works.py` — How BART works (25 min):** Bayesian inference and MCMC primer; sum-of-weak-trees; regularization priors that prevent overfitting; posterior inference over tree structures; why this gives calibrated uncertainty. Built bottom-up in pure NumPy so the sampler reads top-to-bottom.
 - **Break (5 min)**
-- **`01_regression.py` — BART for regression (25 min, hands-on):** Fitting a first model with `pymc-bart`; visualizing posterior predictive distributions with HDI bands; variable importance with uncertainty; partial dependence plots; diagnostics. 2024 Formula 1 lap times across five Grands Prix (Bahrain, Monaco, Spain, Britain, Monza).
-- **`02_classification.py` — BART for classification (15 min, hands-on):** Predicted probabilities with uncertainty (not just class labels); calibration; when BART outperforms logistic regression. GSS 2022 life satisfaction as binary probit and ordered probit.
-- **`03_survival.py` — BART for survival analysis (15 min, hands-on):** Time-to-event data and censoring; survival curves with credible intervals; individualized risk assessment.
+- **`01_regression.py` — BART for regression (25 min, hands-on):** Live path: fit a first `pymc-bart` model, visualize posterior predictive uncertainty, check diagnostics, and read variable-importance / partial-dependence plots. Optional / pre-run sections cover model escalation and tree-count selection. 2024 Formula 1 lap times across five Grands Prix (Bahrain, Monaco, Spain, Britain, Monza).
+- **`02_classification.py` — BART for classification (15 min, hands-on):** **Live path:** predicted probabilities with uncertainty (not just class labels), reliability, and a logistic-regression baseline on the same held-out split. **Take-home extension:** ordered probit on the full life-satisfaction scale.
+- **`03_survival.py` — BART for survival analysis (15 min, hands-on):** **Live path:** a short survival primer, discrete-time hazards, survival curves with credible intervals, and individualized risk assessment. **Optional / pre-run:** synthetic checks and proportional-hazards diagnostics. **Take-home extension:** variable-importance and PDP/ICE follow-ups.
 - **Wrap-up (5 min):** When to use BART vs. alternatives; resources for further learning
 
 
@@ -42,7 +42,7 @@ This tutorial introduces BART through three applications, each demonstrating how
 
 **Regression:** We begin with continuous outcomes, fitting BART models and visualizing posterior predictive distributions. Rather than a single fitted curve, participants will see HDI bands that widen where data is sparse and narrow where evidence is strong. We'll explore variable importance—which comes with its own uncertainty—and partial dependence plots that reveal non-linear effects.
 
-**Classification:** For binary outcomes, BART produces predicted probabilities with uncertainty, not just class labels. We'll examine how this uncertainty propagates through decision-making and compare calibration against standard classifiers.
+**Classification:** For binary outcomes, BART produces predicted probabilities with uncertainty, not just class labels. We'll examine how this uncertainty propagates through decision-making and compare calibration against a standard logistic-regression classifier.
 
 **Survival analysis:** Time-to-event data is inherently uncertain, and BART's flexibility is particularly valuable when the hazard function has unknown shape. Participants will fit survival models and plot individualized survival curves with credible intervals—essential for communicating risk to stakeholders.
 

@@ -1,0 +1,6 @@
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+
+# pre-computed inference artifacts (derived from scripts/precompute_*.py)
+data/idata/

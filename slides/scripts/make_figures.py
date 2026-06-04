@@ -2,7 +2,7 @@
 
 This script is the single source of truth for the deck's PNGs. It does NOT
 re-implement the BART algorithm: it reuses the from-scratch NumPy code and the
-already-computed fits in the (retired but kept) notebook `01_how_bart_works.py`.
+fits in the slide-source notebook `slides/how_bart_works.py`.
 
 Mechanism
 ---------
@@ -36,7 +36,7 @@ import numpy as np  # noqa: E402
 from matplotlib.animation import FuncAnimation, PillowWriter  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-NOTEBOOK = ROOT / "01_how_bart_works.py"
+NOTEBOOK = ROOT / "slides" / "how_bart_works.py"
 IMG = ROOT / "slides" / "images"
 
 

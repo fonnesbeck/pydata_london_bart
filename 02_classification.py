@@ -12,7 +12,7 @@ def _(mo):
     How satisfied are people with their lives, and what predicts it? We use
     the **2022 General Social Survey** — a long-running, nationally
     representative US survey — in which respondents rate their life on a
-    0–10 ladder (`lifenow`). We model that rating with BART at **two
+    1–10 ladder (`lifenow`). We model that rating with BART at **two
     resolutions**:
 
     1. **A binary question first** — is a person *highly* satisfied (9–10)
@@ -24,9 +24,9 @@ def _(mo):
     2. **The full ordinal scale next** — an **ordered probit** that recovers
        the gradation the yes/no question throws away.
 
-    Same data, same predictors, same train/test split throughout. We start
-    simple, see what a binary model can and cannot say, then let the outcome
-    get richer.
+    **Live path.** Start with the binary question, compare held-out
+    probabilities against a logistic-regression baseline, and leave the richer
+    ordinal model as a take-home extension.
     """)
     return
 
@@ -46,10 +46,26 @@ def _():
     import polars as pl
     import pymc as pm
     import pymc_bart as pmb
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 
     RANDOM_SEED = 20260608
     rng = np.random.default_rng(RANDOM_SEED)
-    return Path, RANDOM_SEED, az, np, os, pl, plt, pm, pmb
+    return (
+        LogisticRegression,
+        Path,
+        RANDOM_SEED,
+        az,
+        brier_score_loss,
+        log_loss,
+        np,
+        os,
+        pl,
+        plt,
+        pm,
+        pmb,
+        roc_auc_score,
+    )
 
 
 @app.cell(hide_code=True)
@@ -75,15 +91,38 @@ def _(mo):
     employment; race; and religion (grouped into 5 buckets). Encodings
     matter for the trees — see the split-rules note below.
 
-    We hold out a random **20%** of respondents as a test set, shared by
-    both models, so any calibration claim is about data the model never saw.
+    We hold out a random **20%** of respondents as a test set for the binary
+    BART model and the logistic baseline, so calibration and ranking claims
+    are about data those models never saw.
     """)
     return
 
 
 @app.cell(hide_code=True)
-def _(Path, RANDOM_SEED, np, os, pl, pmb):
-    def load_gss():
+def _(mo):
+    mo.md(r"""
+    ### Data preparation choices
+
+    We encode unordered categoricals as contiguous integer levels so
+    `SubsetSplitRule` can act on them directly. `relig` is grouped into five
+    interpretable buckets (None, Protestant, Catholic, Christian-other,
+    Non-Christian, plus a residual bucket), while `race` is integer-coded from
+    the observed labels.
+
+    For the binary task, “highly satisfied” means `lifenow >= 9`. For the
+    ordered extension, we collapse `lifenow` 1–4 into a single low category
+    because the sparse bottom of the scale would otherwise destabilize the
+    ordered probit. The design matrix combines 8 continuous/ordinal columns,
+    2 binary indicators, and 2 unordered multi-level categoricals, and the
+    same seeded 80/20 split is reused for binary BART, the logistic baseline,
+    and the in-sample ordered-probit extension.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(Path, os, pl):
+    def _load_gss():
         override = os.environ.get("GSS_CSV")
         candidates = []
         if override:
@@ -102,25 +141,6 @@ def _(Path, RANDOM_SEED, np, os, pl, pmb):
             "./data/gss_2022.csv, or clone the Koenigsberg_Bayes repo."
         )
 
-    def _int_code(col):
-        # Map any 1-D array of category labels to contiguous integer codes
-        # 0..K-1. SubsetSplitRule operates on these directly.
-        _, codes = np.unique(col, return_inverse=True)
-        return codes.astype(float)
-
-    def _relig_group(raw):
-        # Collapse the GSS `relig` codes into 5 buckets so SubsetSplitRule has
-        # interpretable levels: None=0 (reference), Protestant=1, Catholic=2,
-        # Christian-other={10,11,13}=3, Non-Christian={3,5,6,7,8,9,12}=4.
-        # Anything else falls into a residual bucket=5.
-        out = np.full(raw.shape, 5, dtype=int)
-        out[raw == 4] = 0
-        out[raw == 1] = 1
-        out[raw == 2] = 2
-        out[np.isin(raw, [10, 11, 13])] = 3
-        out[np.isin(raw, [3, 5, 6, 7, 8, 9, 12])] = 4
-        return out.astype(float)
-
     _kept_cols = [
         "lifenow",
         "age",
@@ -136,21 +156,62 @@ def _(Path, RANDOM_SEED, np, os, pl, pmb):
         "race",
         "relig",
     ]
-    _gss = (
-        load_gss()
+    gss_df = (
+        _load_gss()
         .select(_kept_cols)
         .filter(pl.col("lifenow").is_between(1, 10))
         .drop_nulls()
     )
+    gss_df.shape
+    return (gss_df,)
 
-    _lifenow = _gss["lifenow"].to_numpy().astype(int)
 
-    # Binary target: "highly satisfied" = top of the ladder (9 or 10). ~41%.
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    The data-subsample control defaults to 25% so the notebook opens fast
+    while keeping all seven ordinal classes represented in training. It only
+    reduces the training rows: the held-out test set always stays at full
+    size so out-of-sample metrics remain meaningful.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(gss_df, mo):
+    _n_train = int(0.8 * gss_df.height)
+    _subsample_options = {
+        f"Full (~{_n_train} respondents)": 1.0,
+        f"50% (~{int(0.5 * _n_train)} respondents)": 0.5,
+        f"25% (~{int(0.25 * _n_train)} respondents)": 0.25,
+        f"10% (~{int(0.1 * _n_train)} respondents)": 0.1,
+    }
+    subsample = mo.ui.radio(
+        options=_subsample_options,
+        value=f"25% (~{int(0.25 * _n_train)} respondents)",
+        label="**Data subsample** &mdash; smaller = faster fits for iteration",
+    )
+    subsample
+    return (subsample,)
+
+
+@app.cell(hide_code=True)
+def _(RANDOM_SEED, gss_df, np, pmb, subsample):
+    def _int_code(col):
+        _, codes = np.unique(col, return_inverse=True)
+        return codes.astype(float)
+
+    def _relig_group(raw):
+        out = np.full(raw.shape, 5, dtype=int)
+        out[raw == 4] = 0
+        out[raw == 1] = 1
+        out[raw == 2] = 2
+        out[np.isin(raw, [10, 11, 13])] = 3
+        out[np.isin(raw, [3, 5, 6, 7, 8, 9, 12])] = 4
+        return out.astype(float)
+
+    _lifenow = gss_df["lifenow"].to_numpy().astype(int)
     y_bin = (_lifenow >= 9).astype(int)
-
-    # Ordinal target: collapse lifenow 1-4 into a single low bucket -> 7
-    # categories indexed 0..6 (categories 1-3 hold ~20 obs combined and would
-    # destabilise the ordered probit).
     y_ord = np.clip(_lifenow, 4, None) - 4
     K_ord = 7
 
@@ -169,48 +230,42 @@ def _(Path, RANDOM_SEED, np, os, pl, pmb):
         "relig",
     ]
 
-    # 8 continuous/ordinal columns (age + 7 ordinal scales treated as
-    # equal-interval), then 2 binary indicators (sex=female, fulltime
-    # = wrkstat==1), then 2 multi-level unordered categoricals (race
-    # integer-coded; relig grouped via _relig_group).
     X = np.column_stack(
         [
-            _gss["age"].to_numpy().astype(float),
-            _gss["finrela"].to_numpy().astype(float),
-            _gss["degree"].to_numpy().astype(float),
-            _gss["anxiety"].to_numpy().astype(float),
-            _gss["wrkmeangfl"].to_numpy().astype(float),
-            _gss["stress"].to_numpy().astype(float),
-            _gss["feelnerv"].to_numpy().astype(float),
-            _gss["worry"].to_numpy().astype(float),
-            (_gss["sex"].to_numpy() == 2).astype(float),
-            (_gss["wrkstat"].to_numpy() == 1).astype(float),
-            _int_code(_gss["race"].to_numpy()),
-            _relig_group(_gss["relig"].to_numpy()),
+            gss_df["age"].to_numpy().astype(float),
+            gss_df["finrela"].to_numpy().astype(float),
+            gss_df["degree"].to_numpy().astype(float),
+            gss_df["anxiety"].to_numpy().astype(float),
+            gss_df["wrkmeangfl"].to_numpy().astype(float),
+            gss_df["stress"].to_numpy().astype(float),
+            gss_df["feelnerv"].to_numpy().astype(float),
+            gss_df["worry"].to_numpy().astype(float),
+            (gss_df["sex"].to_numpy() == 2).astype(float),
+            (gss_df["wrkstat"].to_numpy() == 1).astype(float),
+            _int_code(gss_df["race"].to_numpy()),
+            _relig_group(gss_df["relig"].to_numpy()),
         ]
     )
-
-    # Per-column split rules, one per design-matrix column: 8 continuous,
-    # 2 one-hot (binary sex/fulltime), 2 subset (multi-level race/relig).
-    # Shared by the probit and ordered-probit models.
     split_rules = (
         [pmb.ContinuousSplitRule] * 8
         + [pmb.OneHotSplitRule] * 2
         + [pmb.SubsetSplitRule] * 2
     )
 
-    # Shared 80/20 train/test split (seeded) used by both models.
+    # Random 80/20 split; the data-subsample control shrinks only the
+    # training prefix of the shuffled rows, so the test set stays full size.
     _rng_split = np.random.default_rng(RANDOM_SEED)
     _perm = _rng_split.permutation(X.shape[0])
     _n_train = int(0.8 * X.shape[0])
-    train_idx = _perm[:_n_train]
     test_idx = _perm[_n_train:]
+    _n_sub = int(subsample.value * _n_train)
+    train_idx = _perm[:_n_sub]
     X_train, X_test = X[train_idx], X[test_idx]
     y_bin_train, y_bin_test = y_bin[train_idx], y_bin[test_idx]
     y_ord_train, y_ord_test = y_ord[train_idx], y_ord[test_idx]
 
     (
-        f"n={X.shape[0]} (train {len(train_idx)} / test {len(test_idx)}), p={X.shape[1]} | "
+        f"n={X.shape[0]} (train {len(train_idx)} [{subsample.value:.0%} of {_n_train}] / test {len(test_idx)}), p={X.shape[1]} | "
         f"highly-satisfied rate={y_bin.mean():.1%} | "
         f"ordinal K={K_ord}, classes={np.bincount(y_ord).tolist()}"
     )
@@ -229,42 +284,38 @@ def _(Path, RANDOM_SEED, np, os, pl, pmb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## A binary question: who is highly satisfied?
+    ## Live path: who is highly satisfied?
 
-    The simplest version of the question is yes/no. BART produces a
-    real-valued score $\eta = g(x)$ for each person; the probit link
-    $\Phi(\eta)$ squashes it into a probability, and a Bernoulli likelihood
-    ties it to the observed 0/1 label. Probit pairs naturally with BART's
-    Gaussian leaf prior; logit would work too but adds a scale parameter.
+    The regression notebook put uncertainty bands around a continuous mean.
+    Here the posterior draws are probabilities:
+    $\Pr(\text{highly satisfied} \mid x)$, not just class labels.
+
+    BART produces a real-valued score $\eta = g(x)$ for each person; the
+    probit link $\Phi(\eta)$ squashes it into a probability, and a Bernoulli
+    likelihood ties it to the observed 0/1 label. If you have seen logistic
+    regression, probit is the same idea with the standard-normal CDF instead
+    of the logistic sigmoid. Probit pairs naturally with BART's Gaussian leaf
+    prior; logit would work too but adds a scale parameter.
 
     We wrap the design matrix in `pm.Data` so we can swap in the held-out
-    respondents for prediction without rebuilding the model — see the "PyMC
-    patterns for prediction" aside in `01_regression.py` for `set_data` /
-    `sample_posterior_predictive`.
-    """)
-    return
+    respondents for prediction without rebuilding the model — see
+    **Shared mechanics: posterior prediction with `pm.Data`** in
+    `01_regression.py` for `set_data` / `sample_posterior_predictive`.
 
+    ### Split rules: GSS column mapping
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### Split rules: telling BART each column's type
+    The generic split-rule mechanics are in
+    **Shared mechanics: split rules for typed columns** in `01_regression.py`.
+    Here the GSS design matrix uses:
 
-    BART's split rules are per-column. Three ship with `pymc-bart`:
+    - **Continuous / ordinal:** `age`, `finrela`, `degree`, and the wellbeing
+      scales.
+    - **One-hot:** binary indicators `sex` and `fulltime`.
+    - **Subset:** unordered multi-level categoricals `race` and `relig`.
 
-    - **`ContinuousSplitRule`** (default): splits on $x_j \le c$. Correct
-      for numeric or ordinal predictors (age, the wellbeing scales).
-    - **`OneHotSplitRule`**: splits on $x_j = k$ for a single level. Correct
-      for binary indicators (`sex`, `fulltime`).
-    - **`SubsetSplitRule`**: splits on $x_j \in S$ for an arbitrary subset
-      $S \subset \{0, \ldots, K-1\}$ in a single node. Correct for unordered
-      categoricals with $K > 2$ levels (`race`, `relig`).
-
-    Without `SubsetSplitRule`, a $K$-level unordered categorical must either
-    be one-hot expanded (inflating $p$ and forcing BART to chain $K-1$ binary
-    splits across depth levels) or treated as continuous (imposing a
-    spurious ordering). The subset rule does the right thing in one split. We
-    pass `split_rules` as a length-$p$ list in design-matrix order:
+    Treating `race` or `relig` as continuous would impose a fake ordering.
+    `SubsetSplitRule` lets BART split unordered levels directly. We pass
+    `split_rules` in design-matrix order:
     `[age, finrela, degree, anxiety, wrkmeangfl, stress, feelnerv, worry,
     sex, fulltime, race, relig]`.
     """)
@@ -273,8 +324,6 @@ def _(mo):
 
 @app.cell
 def _(RANDOM_SEED, X_train, pm, pmb, split_rules, y_bin_train):
-    # Probit BART: the BART score enters a Bernoulli through invprobit (the
-    # standard-normal CDF, mapping the real-valued score onto [0, 1]).
     with pm.Model() as model_cls:
         X_data = pm.Data("X_data", X_train)
         eta = pmb.BART(
@@ -305,33 +354,175 @@ def _(RANDOM_SEED, X_test, idata_cls, model_cls, pm):
 
 
 @app.cell(hide_code=True)
-def _(np, plt, pp_cls, y_bin_test):
+def _(
+    LogisticRegression,
+    RANDOM_SEED,
+    X_test,
+    X_train,
+    brier_score_loss,
+    feature_names,
+    log_loss,
+    np,
+    pl,
+    pp_cls,
+    roc_auc_score,
+    y_bin_test,
+    y_bin_train,
+):
     _p_draws = pp_cls.predictions["p"].stack(sample=("chain", "draw")).values
-    _p_mean = _p_draws.mean(axis=1)
+    p_bart_test = _p_draws.mean(axis=1)
+
+    _logistic = LogisticRegression(max_iter=2000, random_state=RANDOM_SEED)
+    _logistic.fit(X_train, y_bin_train)
+    p_logistic_test = _logistic.predict_proba(X_test)[:, 1]
+
+    _eps = 1e-15
+    _p_bart_clip = np.clip(p_bart_test, _eps, 1.0 - _eps)
+    _p_logistic_clip = np.clip(p_logistic_test, _eps, 1.0 - _eps)
+
+    assert X_train.shape[1] == X_test.shape[1] == len(feature_names)
+    assert len(p_bart_test) == len(p_logistic_test) == len(y_bin_test)
+    assert np.isfinite(X_train).all() and np.isfinite(X_test).all()
+    assert np.isfinite(p_bart_test).all() and np.isfinite(p_logistic_test).all()
+
+    _bart_brier = brier_score_loss(y_bin_test, p_bart_test)
+    _logistic_brier = brier_score_loss(y_bin_test, p_logistic_test)
+    _bart_log_loss = log_loss(y_bin_test, _p_bart_clip)
+    _logistic_log_loss = log_loss(y_bin_test, _p_logistic_clip)
+    _bart_auc = roc_auc_score(y_bin_test, p_bart_test)
+    _logistic_auc = roc_auc_score(y_bin_test, p_logistic_test)
+
+    _rng_boot = np.random.default_rng(RANDOM_SEED)
+    _boot_idx = _rng_boot.integers(0, len(y_bin_test), size=(1000, len(y_bin_test)))
+    _brier_diff = np.array(
+        [
+            brier_score_loss(y_bin_test[_idx], p_bart_test[_idx])
+            - brier_score_loss(y_bin_test[_idx], p_logistic_test[_idx])
+            for _idx in _boot_idx
+        ]
+    )
+    _diff_lo, _diff_hi = np.quantile(_brier_diff, [0.05, 0.95])
+    _diff_note = (
+        "inconclusive on this split"
+        if _diff_lo <= 0.0 <= _diff_hi or abs(_bart_brier - _logistic_brier) < 0.01
+        else "BART lower Brier"
+        if _bart_brier < _logistic_brier
+        else "logistic lower Brier"
+    )
+
+    cls_comparison = pl.DataFrame(
+        [
+            {
+                "section": "parity",
+                "metric": "train rows",
+                "BART": str(X_train.shape[0]),
+                "logistic": str(X_train.shape[0]),
+                "note": "same X_train / y_bin_train",
+            },
+            {
+                "section": "parity",
+                "metric": "test rows",
+                "BART": str(X_test.shape[0]),
+                "logistic": str(X_test.shape[0]),
+                "note": "same X_test / y_bin_test",
+            },
+            {
+                "section": "parity",
+                "metric": "feature order",
+                "BART": ", ".join(feature_names),
+                "logistic": ", ".join(feature_names),
+                "note": "same design columns",
+            },
+            {
+                "section": "parity",
+                "metric": "finite / missing values",
+                "BART": "all finite, no missing",
+                "logistic": "all finite, no missing",
+                "note": "validated on X_train, X_test, and predicted probabilities",
+            },
+            {
+                "section": "prevalence",
+                "metric": "positive rate",
+                "BART": f"train={y_bin_train.mean():.1%}",
+                "logistic": f"test={y_bin_test.mean():.1%}",
+                "note": "base-rate context",
+            },
+            {
+                "section": "performance",
+                "metric": "Brier score",
+                "BART": f"{_bart_brier:.3f}",
+                "logistic": f"{_logistic_brier:.3f}",
+                "note": f"BART - logistic = {_bart_brier - _logistic_brier:+.3f}; 90% bootstrap CI [{_diff_lo:+.3f}, {_diff_hi:+.3f}] ({_diff_note})",
+            },
+            {
+                "section": "performance",
+                "metric": "log loss",
+                "BART": f"{_bart_log_loss:.3f}",
+                "logistic": f"{_logistic_log_loss:.3f}",
+                "note": f"probabilities clipped to [{_eps:g}, 1-{_eps:g}]",
+            },
+            {
+                "section": "performance",
+                "metric": "AUC",
+                "BART": f"{_bart_auc:.3f}",
+                "logistic": f"{_logistic_auc:.3f}",
+                "note": "ranking only",
+            },
+        ]
+    )
+    cls_comparison
+    return p_bart_test, p_logistic_test
+
+
+@app.cell(hide_code=True)
+def _(np, p_bart_test, p_logistic_test, plt, pp_cls, y_bin_test):
+    _p_draws = pp_cls.predictions["p"].stack(sample=("chain", "draw")).values
+    _p_mean = p_bart_test
     _p_lo, _p_hi = np.quantile(_p_draws, [0.05, 0.95], axis=1)
 
     _fig, (_a, _b) = plt.subplots(1, 2, figsize=(11, 4.0))
 
-    # Reliability diagram: bin held-out predictions into deciles and compare
-    # mean predicted probability to the empirical positive rate in each bin.
     _bins = np.linspace(0, 1, 11)
-    _which = np.clip(np.digitize(_p_mean, _bins) - 1, 0, 9)
-    _xs, _ys, _ns = [], [], []
-    for _k in range(10):
-        _mask = _which == _k
-        if _mask.sum() > 0:
-            _xs.append(_p_mean[_mask].mean())
-            _ys.append(y_bin_test[_mask].mean())
-            _ns.append(int(_mask.sum()))
+
+    def _reliability_points(_p):
+        _which = np.clip(np.digitize(_p, _bins) - 1, 0, 9)
+        _xs, _ys, _ns = [], [], []
+        for _k in range(10):
+            _mask = _which == _k
+            if _mask.sum() > 0:
+                _xs.append(_p[_mask].mean())
+                _ys.append(y_bin_test[_mask].mean())
+                _ns.append(int(_mask.sum()))
+        return _xs, _ys, _ns
+
+    _bart_x, _bart_y, _bart_n = _reliability_points(_p_mean)
+    _log_x, _log_y, _log_n = _reliability_points(p_logistic_test)
     _a.plot([0, 1], [0, 1], "--", color="C3", lw=1)
     _a.scatter(
-        _xs, _ys, s=[max(25, n * 4) for n in _ns], color="#4c72b0", alpha=0.8, zorder=3
+        _bart_x,
+        _bart_y,
+        s=[max(25, n * 4) for n in _bart_n],
+        color="#4c72b0",
+        alpha=0.8,
+        zorder=3,
+        label="BART",
+    )
+    _a.scatter(
+        _log_x,
+        _log_y,
+        s=[max(25, n * 4) for n in _log_n],
+        color="#dd8452",
+        marker="s",
+        alpha=0.75,
+        zorder=3,
+        label="logistic",
     )
     _a.set_xlim(0, 1)
     _a.set_ylim(0, 1)
     _a.set_xlabel(r"mean predicted $\Pr(\text{highly satisfied})$")
     _a.set_ylabel("empirical frequency")
-    _a.set_title("Held-out reliability (decile bins)")
+    _a.set_title("Held-out reliability (decile bins; empty bins omitted)")
+    _a.legend(frameon=False)
 
     _top = np.argsort(-_p_mean)[:20]
     _pos = np.arange(len(_top))
@@ -363,12 +554,16 @@ def _(mo):
     mo.md(r"""
     ### Reading these panels
 
-    **Left — reliability.** We bin the held-out respondents by their
-    predicted probability of being highly satisfied (deciles) and plot, per
-    bin, the mean prediction against the actual fraction who were highly
-    satisfied. Points on the diagonal mean the probabilities are honest:
-    when the model says "60%", about 60% really are. Above the line is
-    under-confidence, below is over-confidence; marker size is the bin count.
+    **Left — reliability.** We bin the held-out respondents by predicted
+    probability of being highly satisfied (deciles) and plot, per bin, the
+    mean prediction against the actual fraction who were highly satisfied.
+    Circles are BART, squares are logistic regression, and marker size is the
+    bin count. Logistic regression is the linear/additive baseline; BART can
+    improve on it when nonlinearities or interactions matter, but a single
+    split should be read as illustrative, especially when metric gaps are
+    small or the bootstrap interval includes zero. Points on the diagonal mean
+    the probabilities are honest: when the model says "60%", about 60% really
+    are. Above the line is under-confidence, below is over-confidence.
 
     **Right — ranking.** The 20 test respondents the model is most confident
     about, coloured green if they really were highly satisfied. A useful
@@ -395,7 +590,6 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(X_train, eta, feature_names, idata_cls, model_cls, pm, pmb):
-    # Reset X_data first: the OOS-prediction cell swapped in the test matrix.
     with model_cls:
         pm.set_data({"X_data": X_train})
         _vi_cls = pmb.compute_variable_importance(idata_cls, eta, X_train)
@@ -405,9 +599,25 @@ def _(X_train, eta, feature_names, idata_cls, model_cls, pm, pmb):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
-    ### Backward variable importance and submodel agreement
+    run_classification_extensions = mo.ui.run_button(
+        label="Run take-home classification extensions"
+    )
+    mo.md(
+        """
+        **Take-home extension:** the remaining sections fit extra BART models
+        or run heavier diagnostics. Click the button only when you want to run
+        the backward-importance, split-prior, and ordered-probit extensions.
 
+        {button}
+        """
+    ).batch(button=run_classification_extensions)
+    return (run_classification_extensions,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Take-home extension: backward variable importance and submodel agreement
     `compute_variable_importance` has two ranking methods:
 
     - `method="VI"` (the default, used above) ranks features by what they
@@ -429,7 +639,25 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(X_train, eta, feature_names, idata_cls, model_cls, np, pm, pmb):
+def _(
+    X_train,
+    eta,
+    feature_names,
+    idata_cls,
+    mo,
+    model_cls,
+    np,
+    pm,
+    pmb,
+    run_classification_extensions,
+):
+    mo.stop(
+        not run_classification_extensions.value,
+        mo.md(
+            "Click **Run take-home classification extensions** to compute backward VI."
+        ),
+    )
+
     class _LabeledMatrix:
         def __init__(self, values, columns):
             self._values = values
@@ -438,7 +666,6 @@ def _(X_train, eta, feature_names, idata_cls, model_cls, np, pm, pmb):
 
         def to_numpy(self):
             return self._values
-
 
     with model_cls:
         pm.set_data({"X_data": X_train})
@@ -460,7 +687,7 @@ def _(pmb, vi_backward):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### `split_prior`: encoding a domain prior
+    ### Take-home extension: `split_prior` encoding a domain prior
 
     BART picks a splitting variable uniformly at random by default.
     `split_prior` lets you bias that choice: pass a length-$p$ array of
@@ -485,9 +712,23 @@ def _(mo):
 
 
 @app.cell
-def _(RANDOM_SEED, X_train, np, pm, pmb, split_rules, y_bin_train):
-    # Same spec as model_cls, but with split_prior upweighting the five
-    # wellbeing-scale columns (indices 3-7) 10x.
+def _(
+    RANDOM_SEED,
+    X_train,
+    mo,
+    np,
+    pm,
+    pmb,
+    run_classification_extensions,
+    split_rules,
+    y_bin_train,
+):
+    mo.stop(
+        not run_classification_extensions.value,
+        mo.md(
+            "Click **Run take-home classification extensions** to fit the split-prior model."
+        ),
+    )
     _split_prior = np.ones(12)
     _split_prior[3:8] = 10.0
     with pm.Model() as model_cls_sp:
@@ -523,10 +764,19 @@ def _(X_train, feature_names, idata_cls, idata_cls_sp, plt, pmb):
 
 
 @app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Convergence diagnostics
+
+    BART random variables need a different diagnostic view from scalar
+    parameters: `az.plot_convergence_dist` summarizes ESS and $\hat R$ across
+    every node of the latent BART score rather than plotting a wall of traces.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
 def _(az, idata_cls):
-    # BART RVs need different convergence diagnostics than scalars:
-    # plot_convergence_dist shows ECDFs of ESS and R-hat across every node
-    # of the BART variable.
     az.plot_convergence_dist(idata_cls, var_names=["eta"])
     return
 
@@ -545,7 +795,7 @@ def _(idata_cls):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## From yes/no to the full scale
+    ## Take-home extension: from yes/no to the full scale
 
     Collapsing satisfaction to "highly satisfied or not" threw away real
     information: it treats someone who rates their life a 5 the same as an 8,
@@ -560,18 +810,22 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## The full scale: ordered-probit life satisfaction
+    ## Optional / pre-run: ordered-probit life satisfaction
 
     We model `lifenow` as **$K = 7$** ordered categories
-    (`<=4, 5, 6, 7, 8, 9, 10`). The latent score is the same BART function;
-    an ordered set of cutpoints turns it into category probabilities. The
-    first cutpoint is fixed at $0$ for identifiability and the remaining
-    $K - 2 = 5$ are constrained increasing via
-    `pm.distributions.transforms.ordered` (with an `initval` already inside
-    the constraint, since a non-ordered start errors before the first NUTS
-    step). `compute_p=False` skips materialising per-category probabilities
-    at every draw — we only need the cutpoints and likelihood, and the
-    probabilities are cheap to recompute post-hoc.
+    (`<=4, 5, 6, 7, 8, 9, 10`). Imagine an unobserved satisfaction score
+    $\eta$: higher values mean higher satisfaction, but the survey only
+    records which interval the score fell into. Ordered cutpoints are the
+    thresholds between those intervals.
+
+    One cutpoint is fixed at $0$ for identifiability: if we shifted every
+    $\eta$ and every cutpoint by the same amount, the category probabilities
+    would not change. The remaining $K - 2 = 5$ cutpoints are constrained
+    increasing via `pm.distributions.transforms.ordered` (with an `initval`
+    already inside the constraint, since a non-ordered start errors before the
+    first NUTS step). `compute_p=False` skips materialising per-category
+    probabilities at every draw; we only need the cutpoints and likelihood, and
+    the probabilities are cheap to recompute post-hoc.
 
     Split rules carry over from the binary model: 8 continuous, 2 one-hot
     (`sex`, `fulltime`), 2 subset (`race`, `relig`). This fit uses
@@ -583,7 +837,24 @@ def _(mo):
 
 
 @app.cell
-def _(K_ord, RANDOM_SEED, X_train, np, pm, pmb, split_rules, y_ord_train):
+def _(
+    K_ord,
+    RANDOM_SEED,
+    X_train,
+    mo,
+    np,
+    pm,
+    pmb,
+    run_classification_extensions,
+    split_rules,
+    y_ord_train,
+):
+    mo.stop(
+        not run_classification_extensions.value,
+        mo.md(
+            "Click **Run take-home classification extensions** to fit the ordered probit."
+        ),
+    )
     with pm.Model() as model_ord:
         eta_ord = pmb.BART(
             "eta",
@@ -644,9 +915,10 @@ def _(mo):
     ### Posterior predictive check
 
     Sample `y` draws from the fitted ordered probit and compare the
-    per-category counts to the observed histogram (on the training set). If
-    the model captures the marginal distribution the observed counts (red
-    dots) sit inside the 90% predictive band (blue error bars).
+    per-category counts to the observed histogram on the **training set**.
+    This is a marginal PPC for the fitted likelihood, not held-out
+    calibration. If the model captures the marginal distribution the observed
+    counts (red dots) sit inside the 90% predictive band (blue error bars).
     """)
     return
 
@@ -737,9 +1009,11 @@ def _(X_train, eta_ord, feature_names, pl, pmb):
         _ax.set_xlabel(_label, fontsize=10)
         _ax.tick_params(axis="both", labelsize=9)
         _ax.grid(axis="y", alpha=0.18)
-    for _ax in _axes[len(_pdp_labels):]:
+    for _ax in _axes[len(_pdp_labels) :]:
         _ax.set_visible(False)
-    _fig.suptitle("Partial dependence on latent life-satisfaction score", fontsize=14, y=0.995)
+    _fig.suptitle(
+        "Partial dependence on latent life-satisfaction score", fontsize=14, y=0.995
+    )
     _fig.supxlabel("Predictor value", fontsize=11)
     _fig.supylabel("Centered partial dependence (probit scale)", fontsize=11)
     _fig.tight_layout(rect=(0.02, 0.03, 1, 0.96))
@@ -752,14 +1026,15 @@ def _(mo):
     mo.md(r"""
     ## What predicts life satisfaction?
 
-    Across both resolutions the same story emerges from the
-    variable-importance and partial-dependence views: the self-reported
-    wellbeing scales — stress, worry, anxiety, how meaningful work feels —
-    move predicted satisfaction far more than demographics like age or
-    education. The binary model answers a sharp question ("who clears the
-    bar?") with a calibration and ranking we can check on held-out data; the
-    ordered probit recovers the gradation in between, at the cost of a much
-    heavier fit. Same BART score underneath — only the likelihood changed.
+    Across the live binary model and the take-home ordinal extension, the same
+    story emerges from the variable-importance and partial-dependence views:
+    the self-reported wellbeing scales — stress, worry, anxiety, how
+    meaningful work feels — move predicted satisfaction far more than
+    demographics like age or education. The binary model answers a sharp
+    question ("who clears the bar?") with calibration, ranking, and a
+    logistic-regression baseline we can check on held-out data; the ordered
+    probit recovers the gradation in between, at the cost of a much heavier
+    fit. Same BART score underneath — only the likelihood changed.
     """)
     return
 

@@ -651,7 +651,7 @@ $$\small \mathrm{PD}_j(v) = \frac{1}{n}\sum_{i=1}^{n} f\!\left(x_i^{(j \to v)}\r
 <!--
 - Parallel curves ⇒ additive feature; crossing curves ⇒ interaction.
 - pymc-bart ships pmb.plot_pdp and pmb.plot_ice.
-- Notebook 02 uses plot_pdp; notebook 04 uses plot_ice (per-individual hazard).
+- `01_regression.py` uses plot_pdp; `03_survival.py` uses plot_ice (per-individual hazard).
 -->
 
 ---
@@ -667,7 +667,7 @@ fixing one particle to the current tree.
 
 <br>
 
-This is the sampler `pymc-bart` uses by default — exposed in notebook 04 as `pmb.PGBART(...)`.
+This is the sampler `pymc-bart` uses by default — exposed in `03_survival.py` as `pmb.PGBART(...)`.
 
 <!-- We don't build PG from scratch; the weight bookkeeping distracts from the core ideas. -->
 
@@ -708,7 +708,7 @@ layout: center
 
 - Give it room: more trees, a longer adaptive phase, sometimes a prior on $a$ itself.
 
-- Production version: the `split_prior` argument of `pmb.BART` (notebook 03).
+- Production version: the `split_prior` argument of `pmb.BART` (`02_classification.py`).
 
 </div>
 

@@ -33,19 +33,29 @@ def _(mo):
     Spain in the middle) and include dry, hot, and wet phases. An 80/20
     random split holds out roughly 1000 laps for testing.
 
-    For each fit we plot the posterior predictive HDI band, check
-    calibration with the PIT, rank variable importance, and visualise
-    partial dependence.
+    **Live path.** For the timed tutorial, focus on the baseline fit,
+    posterior predictive checks, held-out prediction, variable importance,
+    and partial dependence. **Optional / pre-run** sections later diagnose the
+    F1 misfit, escalate the model, and compare tree counts with PSIS-LOO.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Runtime setup
+
+    `pymc-bart` creates a multiprocessing manager, so on Python 3.14 we force
+    the `"fork"` start method. That keeps the notebook runnable both in marimo
+    edit mode and as a plain `python` script, where the default `forkserver`
+    would re-import the module and miss the `if __name__ == "__main__"` guard.
     """)
     return
 
 
 @app.cell
 def _():
-    # pymc-bart's BART RV creates a multiprocessing.Manager(); force the
-    # "fork" start method so this works under both marimo edit and bare
-    # `python` script execution (Python 3.14 defaults to forkserver, which
-    # re-imports the script and breaks without an `if __name__` guard).
     import multiprocessing as mp
 
     mp.set_start_method("fork", force=True)
@@ -87,12 +97,17 @@ def _(pl):
 
 
 @app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    The training-subsample control defaults to 10% so the notebook opens fast.
+    It only reduces the training rows: the held-out test set always stays at
+    full size so out-of-sample coverage and PIT diagnostics remain meaningful.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
 def _(f1_df, mo):
-    # Training-subsample control. Defaults to 10% so the notebook opens light
-    # on memory and fits fast; pick a larger fraction (up to Full) only for a
-    # deliverable-fidelity run. The fraction applies to the training rows only
-    # (see data prep below); the held-out test set is always full size so OOS
-    # coverage and PIT diagnostics stay meaningful.
     _n_train = int(0.8 * f1_df.shape[0])
     _subsample_options = {
         f"Full (~{_n_train} laps)": 1.0,
@@ -103,7 +118,7 @@ def _(f1_df, mo):
     subsample = mo.ui.radio(
         options=_subsample_options,
         value=f"10% (~{int(0.1 * _n_train)} laps)",
-        label="**Training subsample** &mdash; smaller = faster fits for iteration",
+        label="**Data subsample** &mdash; smaller = faster fits for iteration",
     )
     subsample
     return (subsample,)
@@ -112,7 +127,7 @@ def _(f1_df, mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Aside: categorical splits with `OneHotSplitRule` and `SubsetSplitRule`
+    ### Shared mechanics: split rules for typed columns
 
     Two of our features are unordered categoricals. The default
     `ContinuousSplitRule` would treat their integer codes as ordered,
@@ -128,7 +143,18 @@ def _(mo):
 
     For tyre compound (four levels) we use one-hot; for `venue` (five
     levels) we use subset. We pass `split_rules` as a length-$p$ list,
-    one rule per column.
+    one rule per column. The classification and survival notebooks reuse
+    this same typed-column idea with different feature sets.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    We use a random 80/20 split across all five venues, so every venue appears
+    in both train and test. The subsample control is applied only to the
+    shuffled training rows, leaving the full held-out test set untouched.
     """)
     return
 
@@ -161,16 +187,10 @@ def _(RANDOM_SEED, f1_df, np, subsample):
     _y = f1_df["lap_time_s"].to_numpy().astype(float)
     n_num_f1 = len(_num_cols)
 
-    # Random 80/20 split across all 5 venues. Every venue appears in both
-    # train and test, so the venue feature has no out-of-distribution issue
-    # at prediction time.
     _rng_split = np.random.default_rng(RANDOM_SEED)
     _perm = _rng_split.permutation(_X.shape[0])
     _n_train = int(0.8 * _X.shape[0])
     test_idx = _perm[_n_train:]
-    # Apply the training-subsample control. _perm is already shuffled, so the
-    # prefix is a uniform random subsample across all five venues. test_idx is
-    # left at full size.
     _n_sub = int(subsample.value * _n_train)
     train_idx = _perm[:_n_sub]
     X_train = _X[train_idx]
@@ -362,10 +382,10 @@ def _(az, ppc_f1):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### PyMC patterns for prediction
+    ### Shared mechanics: posterior prediction with `pm.Data`
 
     A few PyMC mechanics that appear repeatedly below and across the next
-    three notebooks:
+    two notebooks:
 
     - **`pm.Data` and `pm.set_data`.** Wrapping $X$ in
       `pm.Data("X_data", X)` makes the design matrix a *swappable* runtime
@@ -391,6 +411,9 @@ def _(mo):
       `idata_kwargs={"log_likelihood": True}` shortcut on `pm.sample`. Call
       this once after sampling whenever you need pointwise log-likelihoods,
       which `az.compare` requires for LOO-CV.
+
+    Later notebooks use the same `pm.Data` / posterior-prediction pattern
+    with different likelihoods.
     """)
     return
 
@@ -447,10 +470,9 @@ def _(mo):
     `pmb.compute_variable_importance` ranks features by adding them one at
     a time in order of **inclusion frequency** (how often each appears as a
     splitting variable across the posterior trees) and measuring how the
-    restricted model's $R^2$ recovers the full-model fit. The plot below
-    shows $R^2$ vs the number of variables retained; the curve plateaus at
-    the smallest sufficient subset, which is your defensible feature
-    selection.
+    restricted model's $R^2$ recovers the full-model fit. This is a
+    restricted-fit view of feature selection: the curve plateaus at the
+    smallest subset whose predictions still match the full BART ensemble.
     """)
     return
 
@@ -469,10 +491,11 @@ def _(mo):
     mo.md(r"""
     ### Partial dependence
 
-    `pmb.plot_pdp` shows the marginal effect of each covariate, integrating
-    the other features out over their empirical distribution. See
+    `pmb.plot_pdp` shows a **marginal** effect: vary one covariate and
+    integrate the other features out over their empirical distribution. See
     `slides/how_bart_works.py`'s "Partial dependence and ICE" section for the
     from-scratch derivation; here it's a one-liner against the fitted BART RV.
+    Survival later adds ICE curves, the individualized analogue of PDP.
     """)
     return
 
@@ -490,44 +513,63 @@ def _(mo):
     mo.md(r"""
     ## Diagnosing the F1 fit
 
-    The PIT plot above says calibration is broken ($p \approx 0$):
-    the posterior predictive is over-dispersed and slightly biased.
-    Modelling $\sigma(x)$ separately wouldn't rescue this on its own;
-    when the mean function is structurally wrong, $\sigma$ just
-    absorbs residual misfit.
+    The PIT diagnostic above indicates poor calibration: the posterior
+    predictive distribution is too wide and slightly biased relative to the
+    observed laps. A useful model-criticism workflow is to ask which failure
+    mode the diagnostic is pointing at before tuning blindly:
 
-    During development we escalated four levers one at a time and
-    watched the PIT flatten:
+    1. **Missing structure in `X`.** Add `driver`, `team`, and `position`.
+       Driver-to-driver gaps are 0.3-0.8 s/lap, and team gaps are several
+       seconds. Without those, BART cannot tell a back marker apart from a
+       front runner. This is the biggest correction.
+    2. **Leaf response shape.** Use `response="linear"` so each leaf carries a
+       small linear fit instead of a constant. This helps in the slow-lap tail,
+       where constant leaves struggle to extrapolate.
+    3. **Ensemble capacity and depth prior.** Use $\beta = 1.5$ and $m = 200$:
+       the smaller $\beta$ penalizes depth less, and the larger ensemble gives
+       the fit more room to absorb structure.
+    4. **Residual likelihood.** Even after mean-function fixes, F1 residuals
+       retain a right tail: safety-car, lift, and dirty-air laps survive the
+       0.9-1.3 median filter in `pull_f1_laps.py`. A symmetric Gaussian cannot
+       represent that tail at any $(\mu, \sigma)$ setting, so the final fit uses
+       a Student-T likelihood with learned $\nu$.
 
-    1. **Add `driver`, `team`, `position`.** Driver-to-driver gaps
-       are 0.3-0.8 s/lap, team gaps are several seconds. Without
-       those, BART cannot tell a back marker apart from a front
-       runner. Single biggest improvement.
-    2. **`response="linear"` leaves.** Each leaf carries a small
-       linear fit instead of a constant. Helps extrapolation into
-       the slow-lap tail.
-    3. **$\beta = 1.5$, $m = 200$.** The depth prior allows deeper
-       trees ($\beta$ smaller -> less penalty for depth) and the
-       larger ensemble gives more room to absorb structure.
-    4. **`pm.StudentT` likelihood with learned $\nu$.** Even after
-       levers 1-3, the PIT shape barely moved. The remaining
-       miscalibration is in the *likelihood*, not the mean. F1
-       residuals retain a right tail (the SC / lift / dirty-air
-       laps that survive the 0.9-1.3 median filter in
-       `pull_f1_laps.py`); a symmetric Gaussian cannot represent
-       them at any $(\mu, \sigma)$ setting.
+    Feature audit usually beats hyperparameter tuning: improve the design
+    matrix first, then tune the tree prior and likelihood.
+    """)
+    return
 
-    Below we show the fully-escalated fit (all four levers applied
-    at once).
+
+@app.cell(hide_code=True)
+def _(mo):
+    run_f1_escalation = mo.ui.run_button(label="Run optional F1 escalation fit")
+    mo.md(
+        """
+        **Optional / pre-run:** the next model adds `driver`, `team`, and
+        `position`, switches to linear leaves, deepens the ensemble
+        (`beta=1.5`, `m=200`), and uses a Student-T likelihood. Click the
+        button only when you want to run the escalated fit and its dependent
+        diagnostics.
+
+        {button}
+        """
+    ).batch(button=run_f1_escalation)
+    return (run_f1_escalation,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    The escalated F1 design matrix keeps the same train/test rows as the
+    baseline fit, but adds `driver`, `team`, and `position`. The new
+    categorical columns are integer-coded so the one-hot and subset split rules
+    can act on them directly.
     """)
     return
 
 
 @app.cell
 def _(f1_df, np, pl, test_idx, train_idx):
-    # Expanded feature set: adds driver, team, position to the baseline.
-    # Categorical columns are integer-coded via polars Categorical -> physical
-    # so OneHotSplitRule and SubsetSplitRule can split on them.
     num_cols_full = [
         "tyre_life",
         "lap_number",
@@ -551,8 +593,6 @@ def _(f1_df, np, pl, test_idx, train_idx):
     _X_full = np.concatenate([_X_num, _X_cat], axis=1)
     _y_full = f1_df["lap_time_s"].to_numpy().astype(float)
 
-    # Reuse the train/test indices from the baseline data prep so the
-    # baseline and Student-T fits are trained / tested on the same rows.
     X_train_full = _X_full[train_idx]
     y_train_full = _y_full[train_idx]
     X_test_full = _X_full[test_idx]
@@ -561,10 +601,20 @@ def _(f1_df, np, pl, test_idx, train_idx):
 
 
 @app.cell
-def _(RANDOM_SEED, X_train_full, n_numeric_full, pm, pmb, y_train_full):
-    # Final escalation: expanded feature set + linear leaves + beta=1.5
-    # + m=200 + StudentT(nu) likelihood. driver/team/compound stay on
-    # OneHotSplitRule; venue uses SubsetSplitRule (multi-level unordered).
+def _(
+    RANDOM_SEED,
+    X_train_full,
+    mo,
+    n_numeric_full,
+    pm,
+    pmb,
+    run_f1_escalation,
+    y_train_full,
+):
+    mo.stop(
+        not run_f1_escalation.value,
+        mo.md("Click **Run optional F1 escalation fit** to run the Student-T model."),
+    )
     _rules_t = (
         [pmb.ContinuousSplitRule] * n_numeric_full
         + [pmb.OneHotSplitRule] * 3
@@ -596,10 +646,17 @@ def _(RANDOM_SEED, X_train_full, n_numeric_full, pm, pmb, y_train_full):
     return idata_f1_t, model_f1_t
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    We check the escalated model against the training data first because the
+    PIT diagnostic below uses the same posterior sample we just fit.
+    """)
+    return
+
+
 @app.cell
 def _(RANDOM_SEED, idata_f1_t, model_f1_t, pm, y_train_full):
-    # PPC against the training data is fast; do it live so the PIT plot
-    # below reflects the same idata we just loaded.
     with model_f1_t:
         ppc_f1_t = pm.sample_posterior_predictive(
             idata_f1_t,
@@ -618,12 +675,18 @@ def _(az, ppc_f1_t):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    Out-of-sample prediction for the escalated model must use `X_test_full`,
+    not the baseline `X_test`: the escalated fit has 12 features, so the
+    9-column baseline matrix would shape-mismatch against the trained trees.
+    """)
+    return
+
+
 @app.cell
 def _(RANDOM_SEED, X_test_full, idata_f1_t, model_f1_t, pm):
-    # OOS prediction uses the held-out British GP. X_test_full has 12
-    # features (matching the Student-T model's expanded feature set);
-    # X_test from the baseline has 9 features and would shape-mismatch
-    # against the trained trees.
     with model_f1_t:
         pm.set_data({"X_data": X_test_full})
         pp_f1_t = pm.sample_posterior_predictive(
@@ -688,7 +751,7 @@ def _(az, idata_f1, idata_f1_t, pl):
 
     pl.DataFrame(
         [
-            _row("baseline (8 features, Normal)", idata_f1),
+            _row("baseline (9 features, Normal)", idata_f1),
             _row("+ features + linear + β=1.5 + Student-T", idata_f1_t, with_nu=True),
         ]
     )
@@ -702,8 +765,8 @@ def _(mo):
     `team` does most of the work. `response='linear'` extends the leaf
     model into the slow-lap tail, where constant leaves struggle to
     extrapolate. Deepening the trees ($\beta=1.5$, $m=200$) polishes
-    residuals further; with $n \approx 4{,}150$ training laps across the
-    5 venues the model has enough signal to support the deeper ensemble.
+    residuals further; on the full training subsample the model has enough
+    signal across 5 venues to support the deeper ensemble.
     """)
     return
 
@@ -712,6 +775,10 @@ def _(mo):
 def _(mo):
     mo.md(r"""
     ## Choosing the number of trees with PSIS-LOO-CV
+
+    **Optional / pre-run.** This section refits three additional BART models,
+    so it is gated for live teaching. Run it when you want a full-fidelity
+    model-selection demonstration rather than the fast live path.
 
     `m` is BART's main knob: how many trees vote on the prediction. The
     Quiroga et al. paper recommends comparing fits at a few values of `m`
@@ -726,14 +793,29 @@ def _(mo):
     above; the LOO numbers are directly comparable.
 
     **How to read `az.compare`:** rows are sorted by `elpd` (higher is
-    better - expected log-pointwise-predictive density on held-out data,
-    estimated by PSIS-LOO by default in ArviZ 1.x). `dse` is the standard
-    error of the difference to the top model; differences within a few
-    `dse` are not meaningfully distinguishable. `weight` is a stacking
+    better - approximate leave-one-out predictive performance from the
+    training fit, estimated by PSIS-LOO by default in ArviZ 1.x). `dse` is
+    the standard error of the difference to the top model; differences within
+    a few `dse` are not meaningfully distinguishable. `weight` is a stacking
     weight (how much to trust each fit in a model average). Pick the
     smallest `m` whose ELPD is within a few `dse` of the largest.
     """)
     return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    run_m_sweep = mo.ui.run_button(label="Run optional PSIS-LOO refits")
+    mo.md(
+        """
+        **Optional / pre-run:** the next cells fit three additional BART
+        ensembles. Click the button only when you want to run the tree-count
+        comparison.
+
+        {button}
+        """
+    ).batch(button=run_m_sweep)
+    return (run_m_sweep,)
 
 
 @app.cell(hide_code=True)
@@ -754,19 +836,22 @@ def _(RANDOM_SEED, X_train, f1_split_rules, pm, pmb, y_train):
 
 
 @app.cell(hide_code=True)
-def _(fit_f1_m):
+def _(fit_f1_m, mo, run_m_sweep):
+    mo.stop(not run_m_sweep.value, mo.md("Click **Run optional PSIS-LOO refits** to fit `m=10`."))
     idata_f1_m10 = fit_f1_m(10)
     return (idata_f1_m10,)
 
 
 @app.cell(hide_code=True)
-def _(fit_f1_m):
+def _(fit_f1_m, mo, run_m_sweep):
+    mo.stop(not run_m_sweep.value, mo.md("Click **Run optional PSIS-LOO refits** to fit `m=50`."))
     idata_f1_m50 = fit_f1_m(50)
     return (idata_f1_m50,)
 
 
 @app.cell(hide_code=True)
-def _(fit_f1_m):
+def _(fit_f1_m, mo, run_m_sweep):
+    mo.stop(not run_m_sweep.value, mo.md("Click **Run optional PSIS-LOO refits** to fit `m=200`."))
     idata_f1_m200 = fit_f1_m(200)
     return (idata_f1_m200,)
 

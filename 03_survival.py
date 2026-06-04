@@ -6,9 +6,7 @@ app = marimo.App(width="medium")
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.vstack(
-        [
-            mo.md(r"""
+    mo.md(r"""
     # BART for survival analysis: Tommy John surgery recovery
 
     Tommy John surgery, ulnar collateral ligament reconstruction, is
@@ -23,57 +21,33 @@ def _(mo):
     shortening average return time; the top eight surgeons account for
     a third of all surgeries.
 
-    Tommy John surgery rebuilds the elbow's **ulnar collateral ligament
-    (UCL)**, the medial ligament that resists the valgus stress of high-
-    velocity throwing. When the UCL can no longer stabilize the joint,
-    surgeons typically harvest a tendon graft, drill tunnels in the
-    humerus and ulna, and thread the graft through those tunnels to
-    replace the torn ligament. The operation is named for Tommy John,
-    the pitcher who underwent Dr. Frank Jobe's first successful
-    professional-baseball UCL reconstruction in 1974; modern return-to-
-    competitive-throwing rehab still commonly runs 12--18 months.
-    """),
-            mo.image(
-                "images/ucl.webp",
-                alt="Diagram of elbow medial collateral ligament bundles and Tommy John UCL reconstruction with tendon graft threaded through humerus and ulna tunnels",
-                width="100%",
-                rounded=True,
-                caption="The UCL spans the medial elbow between humerus and ulna; reconstruction replaces the damaged ligament with a tendon graft routed through bone tunnels.",
-            ),
-            mo.md(r"""
+    **Survival basics.** The event is returning to play. A censored player is
+    observed for some amount of time without a recorded return; they may still
+    be at risk after our observation window ends. The **at-risk set** at month
+    $t$ is everyone who has not yet returned or been censored before that
+    month. The **hazard** is the chance of returning during month $t$ given
+    that the player is still at risk, and the **survival curve** is the
+    probability of still not having returned by month $t$.
+
     We model **discrete-time hazards**: at each integer month $t$
     post-surgery the return event occurs with probability
     $$h(t \mid x) = 1 - \exp\!\bigl(-\exp(g(t, x))\bigr),$$
     where $g$ is a sum of trees and the link is complementary log-log
-    (cloglog). Equivalently, the interval cumulative hazard is
-    $$\Lambda(t \mid x) = -\log\{1 - h(t \mid x)\} = \exp(g(t, x)).$$
-    The cloglog link is the discrete-time analogue of the Cox
-    proportional-hazards model: if $g$ were linear in $x$, the ratio of
-    interval cumulative hazards between any two profiles would be
-    constant in $t$. BART makes $g$ a sum of trees instead, so the same
-    likelihood can represent time-varying hazard ratios. Each subject
-    contributes one row per month they remain at risk; the outcome is
-    "did they return this month?". That is exactly the binary
-    classification setup from the classification notebook, applied to
-    expanded person-time data. Survival follows from the hazards:
+    (cloglog). Each subject contributes one row per month they remain at risk;
+    the outcome is "did they return this month?". That is exactly the binary
+    classification setup from the classification notebook, applied to expanded
+    person-time data. Survival follows from the hazards:
     $$S(t \mid x) = \prod_{s \le t} \bigl(1 - h(s \mid x)\bigr).$$
 
-    The notebook runs in two passes:
+    The notebook has a **Live path** and optional checks:
 
-    1. **A synthetic warmup** with a known data-generating process.
-       The DGP is constructed to bake in a non-proportional-hazards
-       treatment effect (HR(t) steps from 1 to 2 to 3 across the
-       36-month horizon), a structure a no-interaction linear cloglog
-       GLM has no parameters to fit. We fit BART and a cloglog GLM side by
-       side and verify the BART machinery recovers what we put in.
-    2. **The real Tommy John data**, using the same machinery. Once
-       we trust BART against a known truth, we use it as a flexible
-       alternative to the standard Cox-PH-style analysis on real
-       data whose true structure is unknown.
-    """),
-        ],
-        gap=1,
-    )
+    1. **Optional / pre-run machinery check.** A synthetic dataset with known
+       truth verifies that BART can recover a non-proportional-hazards effect
+       that a no-interaction linear cloglog GLM cannot represent.
+    2. **Live path: the real Tommy John data.** We use the same discrete-time
+       hazard machinery as a flexible alternative to a Cox-PH-style analysis
+       on real data whose true structure is unknown.
+    """)
     return
 
 
@@ -96,16 +70,69 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
+    run_survival_extensions = mo.ui.run_button(
+        label="Run optional survival checks and take-home extensions"
+    )
+    mo.md(
+        """
+        **Optional / pre-run and take-home:** clinical context, the synthetic
+        machinery check, posterior-predictive KM check, hazard-panel expansion,
+        and VI/PDP/ICE tail are useful follow-up material. Click the button
+        only when you want to execute those heavier sections.
+
+        {button}
+        """
+    ).batch(button=run_survival_extensions)
+    return (run_survival_extensions,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.vstack(
+        [
+            mo.md(r"""
+            ## Optional / pre-run: Tommy John clinical context
+
+            Tommy John surgery rebuilds the elbow's **ulnar collateral ligament
+            (UCL)**, the medial ligament that resists the valgus stress of
+            high-velocity throwing. When the UCL can no longer stabilize the
+            joint, surgeons typically harvest a tendon graft, drill tunnels in
+            the humerus and ulna, and thread the graft through those tunnels to
+            replace the torn ligament. 
+            """),
+            mo.md(r"""
+            The operation is named for Tommy John,
+            the pitcher who underwent Dr. Frank Jobe's first successful
+            professional-baseball UCL reconstruction in 1974; modern
+            return-to-competitive-throwing rehab still commonly runs 12--18
+            months.
+            """),
+            mo.image(
+                "images/ucl.webp",
+                alt="Diagram of elbow medial collateral ligament bundles and Tommy John UCL reconstruction with tendon graft threaded through humerus and ulna tunnels",
+                width="100%",
+                rounded=True,
+                caption="The UCL spans the medial elbow between humerus and ulna; reconstruction replaces the damaged ligament with a tendon graft routed through bone tunnels.",
+            ),
+        ],
+        gap=1,
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
     mo.md(r"""
-    ## Warm-up: a constructed machinery check
+    ## Optional / pre-run: a constructed machinery check
 
     Before fitting BART on real Tommy John data, we check the
     machinery end-to-end on a synthetic dataset where the truth is
     known. This is not a fair contest between BART and the cloglog
-    GLM. The DGP below mirrors the real-data feature layout (person-
-    time discrete hazards on a 36-month horizon, 7 covariates) but
-    keeps the signal deliberately simple: only the time block, revision
-    indicator, and their interaction matter.
+    GLM; it is a pre-run verification that the survival-BART machinery
+    can recover a pattern we deliberately put into the data. The DGP below
+    mirrors the real-data feature layout (person-time discrete hazards on a
+    36-month horizon, 7 covariates) but keeps the signal deliberately simple:
+    only the time block, revision indicator, and their interaction matter.
 
     The non-proportional-hazards effect is about the **interval
     cumulative hazard ratio**, not the baseline recovery-time shape.
@@ -137,8 +164,8 @@ def _(mo):
     - the stepwise HR(t) curve recovered by BART while the GLM stays flat
       by construction.
 
-    Once we trust the machinery against the known truth, we apply it
-    to the real Tommy John data whose structure we do not know.
+    Once the machinery check is understood, the live path can skip the fit
+    details and move to the real Tommy John data whose structure we do not know.
     """)
     return
 
@@ -207,10 +234,11 @@ def _(mo):
     5-level surgeon category (reference = level 0), and `doy` passing
     through as the [0, 1] noise feature; its time baseline enters
     separately through the quarterly `sim_q_idx`. BART instead takes the
-    raw covariate matrix, with `split_rules` assigning each column the
-    right tree geometry: subset splits for the 3-level time block and
-    the surgeon category, continuous splits for `age`/`year`/`doy`, and
-    one-hot splits for the binary `throws` and `rev`.
+    raw covariate matrix. The split-rule idea is the same as
+    **Shared mechanics: split rules for typed columns** in `01_regression.py`:
+    subset splits for the 3-level time block and surgeon category, continuous
+    splits for `age`/`year`/`doy`, and one-hot splits for binary `throws` and
+    `rev`.
     """)
     return
 
@@ -258,16 +286,30 @@ def _(mo):
     Both models now fit the same simulated person-time rows. The BART
     fit uses warmup-scale settings — `m=20` trees and 300 draws on 2
     chains, versus `m=100` and full-length chains on the real data —
-    enough to verify that the known signal is recoverable. The cloglog
-    GLM has no treatment-by-time interaction term, so it is structurally
-    incapable of representing the non-PH treatment effect baked into the
-    DGP; that structural limitation is exactly what BART relaxes.
+    enough to verify that the known signal is recoverable. The synthetic
+    fit cells are **Optional / pre-run**; read the result and continue if the
+    live session needs to move quickly.
     """)
     return
 
 
 @app.cell
-def _(RANDOM_SEED, pm, pmb, sim_X, sim_split_rules, sim_y):
+def _(
+    RANDOM_SEED,
+    mo,
+    pm,
+    pmb,
+    run_survival_extensions,
+    sim_X,
+    sim_split_rules,
+    sim_y,
+):
+    mo.stop(
+        not run_survival_extensions.value,
+        mo.md(
+            "Click **Run optional survival checks and take-home extensions** to fit the synthetic BART model."
+        ),
+    )
     with pm.Model() as model_sim_bart:
         X_sim_data = pm.Data("X_sim_data", sim_X)
         eta_sim = pmb.BART(
@@ -291,7 +333,21 @@ def _(RANDOM_SEED, pm, pmb, sim_X, sim_split_rules, sim_y):
 
 
 @app.cell
-def _(RANDOM_SEED, pm, sim_X_glm, sim_q_idx, sim_y):
+def _(
+    RANDOM_SEED,
+    mo,
+    pm,
+    run_survival_extensions,
+    sim_X_glm,
+    sim_q_idx,
+    sim_y,
+):
+    mo.stop(
+        not run_survival_extensions.value,
+        mo.md(
+            "Click **Run optional survival checks and take-home extensions** to fit the synthetic GLM."
+        ),
+    )
     with pm.Model() as model_sim_glm:
         X_sim_glm_data = pm.Data("X_sim_glm_data", sim_X_glm)
         sim_q_idx_data = pm.Data("sim_q_idx_data", sim_q_idx, dims="row")
@@ -352,7 +408,7 @@ def _(np, sim_age_mean, sim_age_sd, sim_year_mean, sim_year_sd):
                 np.full(n, sim_ref["doy"]),
                 np.full(n, sim_ref["throws"]),
                 np.full(n, rev),
-                np.zeros((n, 4)),  # all surgeon dummies 0 = reference surgeon 0
+                np.zeros((n, 4)),
             ]
         )
 
@@ -405,7 +461,7 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Did we recover the truth?
+    ### Optional / pre-run: did we recover the truth?
 
     The figure below compares three things at the treatment contrast
     (rev=1 vs rev=0):
@@ -415,18 +471,12 @@ def _(mo):
       not the raw event probability.
     - **BART** (blue, with 90% CrI) reads HR(t) from its posterior
       predictive at the two profiles.
-    - **Cloglog GLM** (red) reads `exp(beta_rev)` from the linear
-      coefficient, a single number constant in t.
+    - **Cloglog GLM** (red) reads one constant revision effect, so its
+      interval HR curve is flat.
 
-    A proportional-hazards model would make the rev=1 and rev=0
-    interval cumulative hazards differ by one constant multiplier at
-    every month, so the HR curve would be flat. Here the two profiles
-    share the same broad baseline recovery shape, but their **interval
-    hazard ratio** changes by month block; that is what makes the DGP
-    non-proportional. A well-functioning BART fit should recover the
-    step pattern within posterior uncertainty. A well-functioning GLM
-    lands near the average of the three true HR levels, which is what a
-    no-interaction PH model should do.
+    This is the expected behavior of the machinery check: BART should recover
+    the step pattern within posterior uncertainty, while the no-interaction PH
+    comparator should land near an average of the three true HR levels.
     """)
     return
 
@@ -524,7 +574,7 @@ def _(mo):
     estimate one average rev effect over all months. That flat red line
     is the expected failure mode of the comparator, not a sampling bug.
 
-    ## Now to the real data
+    ## Live path: the real data
 
     With the machinery validated on a known DGP, we apply the same
     discrete-time hazard BART (and its cloglog GLM comparator) to the
@@ -540,19 +590,18 @@ def _(mo):
     horizon is imposed: anyone still not returned by then is censored
     at $t = 36$.
 
-    A deterministic subsample to 500 subjects keeps the person-month
-    expansion to roughly 12k rows and the live-tutorial BART fit to
-    roughly 6 minutes. The seed is fixed so attendees see the same
-    numbers we do.
+    The data-subsample control below defaults to 500 subjects, which
+    keeps the person-month expansion to roughly 12k rows and the
+    live-tutorial BART fit to roughly 6 minutes. The seed is fixed so
+    attendees see the same numbers we do.
     """)
     return
 
 
 @app.cell
-def _(RANDOM_SEED, pl):
+def _(pl):
     HORIZON = 36.0
-    SUBSAMPLE_N = 500
-    tj_df = (
+    tj_all = (
         pl.read_parquet("data/tommy_john.parquet")
         .filter(
             (pl.col("surgery_year") >= 1990)
@@ -573,8 +622,31 @@ def _(RANDOM_SEED, pl):
             .then(HORIZON)
             .otherwise(pl.col("time_months")),
         )
-        .sample(n=SUBSAMPLE_N, seed=RANDOM_SEED, shuffle=True)
     )
+    f"{tj_all.height} subjects pass the 1990-2022 filters"
+    return HORIZON, tj_all
+
+
+@app.cell(hide_code=True)
+def _(mo, tj_all):
+    _subsample_options = {
+        f"Full ({tj_all.height} subjects)": tj_all.height,
+        "1000 subjects": 1000,
+        "500 subjects": 500,
+        "250 subjects": 250,
+    }
+    subsample = mo.ui.radio(
+        options=_subsample_options,
+        value="500 subjects",
+        label="**Data subsample** &mdash; fewer subjects = faster fits for iteration",
+    )
+    subsample
+    return (subsample,)
+
+
+@app.cell
+def _(HORIZON, RANDOM_SEED, subsample, tj_all):
+    tj_df = tj_all.sample(n=int(subsample.value), seed=RANDOM_SEED, shuffle=True)
     f"{tj_df.height} subjects, {int(tj_df['event'].sum())} returns, {tj_df.height - int(tj_df['event'].sum())} censored at {HORIZON:.0f}-month horizon"
     return (tj_df,)
 
@@ -602,8 +674,8 @@ def _(mo):
     competing events inside the horizon. The honest fix is a
     competing-risks model. Sparapani et al. (2020, *SMMR* 29:57-77)
     extend BART to subdistribution hazards for exactly this setup;
-    we treat that as out of scope for this notebook and flag the
-    direction of bias instead.
+    we treat that as out of scope for this notebook and carry the
+    direction of bias through the interpretation below.
     """)
     return
 
@@ -624,10 +696,12 @@ def _(mo):
     Categorical columns are integer-coded against sorted level lists
     that we keep around, so prediction profiles later encode levels by
     name (`surgeon_levels.index(...)`) rather than hardcoding codes.
-    `split_rules` assigns each column the right tree geometry:
-    continuous splits for `t`/`age`/`year`/`doy`, one-hot for the
-    binary `throws` and `revision`, and subset splits for the 10-level
-    surgeon group.
+    As in **Shared mechanics: split rules for typed columns**, `split_rules`
+    assigns each column the right tree geometry: continuous splits for
+    `t`/`age`/`year`/`doy`, one-hot for binary `throws` and `revision`, and
+    subset splits for the 10-level surgeon group. We use `max(1, ceil(time))`
+    in the expansion so the rare same-day censor still contributes one
+    at-risk row.
     """)
     return
 
@@ -641,9 +715,6 @@ def _(np, pmb, tj_df):
 
     _rows = []
     for _r in tj_df.iter_rows(named=True):
-        # max(1, ceil(...)) guards against a same-day censor that
-        # rounds to zero; today's filtered minimum is ~8 months so
-        # this is purely defensive, but cheap.
         _n_periods = max(1, int(np.ceil(_r["time_months"])))
         for _t in range(1, _n_periods + 1):
             _rows.append(
@@ -691,7 +762,6 @@ def _(mo):
     predictor is a *linear* combination of covariate effects plus a
     flexible baseline hazard.
 
-    Two choices for the link function carry different assumptions.
     With a **complementary log-log** link,
     $$h(t \mid x) \;=\; 1 - \exp\!\bigl(-\exp(\alpha_t + x^\top \beta)\bigr),$$
     the interval cumulative hazard is
@@ -702,19 +772,18 @@ def _(mo):
     event-probability ratio $h(t \mid x_1) / h(t \mid x_2)$ is only
     approximately the same when monthly hazards are small.
 
-    We give the baseline log-interval-hazard $\alpha_t$ twelve degrees of freedom
-    (one log-hazard per quarter, $t \in \{1\text{-}3, 4\text{-}6, \ldots, 34\text{-}36\}$),
-    which is plenty of flexibility on the time axis. Any remaining
-    disagreement with BART will then be honestly about the covariate
-    effects, not the baseline.
+    We give the baseline log-interval-hazard $\alpha_t$ twelve degrees of
+    freedom (one log-hazard per quarter, $t \in \{1\text{-}3, 4\text{-}6,
+    \ldots, 34\text{-}36\}$), which is plenty of flexibility on the time
+    axis. Any remaining disagreement with BART will then be honestly about
+    the covariate effects, not the baseline.
 
     BART uses the same cloglog link as this GLM, so the classical-vs-BART
     contrast lives on a single axis: the function class of the linear
     predictor. Linear additive (GLM) vs. tree sum (BART). If $g(t, x)$
-    were linear in this notebook's BART model, strict proportional
-    hazards would hold there too; any time-varying hazard ratio we
-    recover is unambiguously a consequence of the tree-sum function
-    class, not the link.
+    were linear in this notebook's BART model, strict proportional hazards
+    would hold there too; any time-varying hazard ratio we recover is a
+    consequence of the tree-sum function class, not the link.
 
     Concretely, the design matrix below standardizes the continuous
     covariates, passes the binary indicators through, and dummy-codes
@@ -883,7 +952,7 @@ def _(idata_surv):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Covariate contrast profiles
+    ### Live path: covariate contrast profiles
 
     To see what the two fits imply, we evaluate both posteriors at a
     grid of covariate profiles. The reference profile holds each
@@ -893,11 +962,13 @@ def _(mo):
     Each panel below sweeps one covariate while pinning the rest at the
     reference values; the age contrast uses {20, 30, 40} since the data
     spans ages 13--47.
-
     Every profile is encoded twice — `X_profiles` in the raw 7-column
     BART design and `X_profiles_glm` in the wide GLM design — and
     `q_idx_profiles` maps each profile row to its quarter for the
-    GLM's $\alpha_q$ baseline.
+    GLM's $\alpha_q$ baseline. As in **Shared mechanics: posterior prediction
+    with `pm.Data`**, we swap these profile rows into the fitted models before
+    sampling. For the GLM, `h_glm` is a Deterministic of `alpha_q` and `beta`,
+    so we also reattach `q_idx_data` and sample hazard draws directly.
     """)
     return
 
@@ -992,8 +1063,6 @@ def _(RANDOM_SEED, X_profiles, idata_surv, model_surv, pm):
 
 @app.cell
 def _(RANDOM_SEED, X_profiles_glm, idata_glm, model_glm, pm, q_idx_profiles):
-    # h_glm is a Deterministic of (alpha_q, beta), so var_names=["h_glm"]
-    # yields hazard draws directly; q_idx_data must be re-attached too.
     with model_glm:
         pm.set_data({"X_glm_data": X_profiles_glm, "q_idx_data": q_idx_profiles})
         pp_glm = pm.sample_posterior_predictive(
@@ -1008,21 +1077,25 @@ def _(RANDOM_SEED, X_profiles_glm, idata_glm, model_glm, pm, q_idx_profiles):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
+    ### Live path: survival curves
+
     From hazard draws to survival curves: each profile contributes 36
     consecutive rows of the posterior predictive, which are sliced out
     and accumulated via $S(t) = \prod_{s \le t} (1 - h(s))$ — once for
-    the BART draws and once for the GLM draws. As a no-covariate
+    the BART draws and once for the GLM draws. We stack chain and draw into a
+    single sample axis before building the survival curves. As a no-covariate
     reference, a marginal Kaplan-Meier curve computed from the
     subject-level data (empirical per-month hazard, no model) is
-    overlaid as a dotted gray line on every panel; the
-    covariate-stratified curves should bracket it in the aggregate.
+    overlaid as a dotted gray line on every panel.
+
+    Interpret these curves under the right-censoring assumption above:
+    career-ending non-returns treated as censored can bias survival upward.
     """)
     return
 
 
 @app.cell
 def _(np, pp_glm, pp_surv, profile_names, times):
-    # stack(sample=("chain", "draw")) flattens chain x draw into one axis.
     _h_draws = pp_surv.predictions["h"].stack(sample=("chain", "draw")).values
     _h_glm_draws = pp_glm.predictions["h_glm"].stack(sample=("chain", "draw")).values
     _n_t = len(times)
@@ -1147,7 +1220,7 @@ def _(S_curves, S_glm_curves, S_km, np, plt, times):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Hazards behind the survival curves
+    ### Optional / pre-run: hazards behind the survival curves
 
     Survival is the cumulative product
     $S(t \mid x) = \prod_{s \le t}(1 - h(s \mid x))$, but what BART
@@ -1166,7 +1239,14 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(h_curves, h_glm_curves, np, plt, times):
+def _(h_curves, h_glm_curves, mo, np, plt, run_survival_extensions, times):
+    mo.stop(
+        not run_survival_extensions.value,
+        mo.md(
+            "Click **Run optional survival checks and take-home extensions** to draw the hazard panel."
+        ),
+    )
+
     def _band_h(curves):
         return curves.mean(axis=0), np.quantile(curves, [0.05, 0.95], axis=0)
 
@@ -1243,14 +1323,11 @@ def _(h_curves, h_glm_curves, np, plt, times):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Does the proportional-hazards assumption hold?
+    ### Live path: does the proportional-hazards assumption hold?
 
-    The headline pitch for nonparametric survival models like BART is
-    that they do **not** assume the interval cumulative hazard ratio
-    between two covariate profiles is constant over time. The cloglog
-    GLM does: by construction, the discrete-time cloglog model gives
-    $\Lambda(t \mid x_1) / \Lambda(t \mid x_2) = \exp\{\beta^\top (x_1 - x_2)\}$,
-    the same at every $t$.
+    The GLM comparator above assumes a constant interval cumulative hazard
+    ratio over time. BART does not have to: the same cloglog link is wrapped
+    around a tree-sum function of both time and covariates.
 
     The plot below contrasts the two on a single comparison: 40-year-old
     vs 20-year-old pitcher, all other covariates pinned at the
@@ -1315,7 +1392,7 @@ def _(age_sd_glm, h_curves, idata_glm, np, plt, times):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Posterior-predictive Kaplan-Meier check
+    ### Optional / pre-run: posterior-predictive Kaplan-Meier check
 
     Posterior-predictive checks for survival data look different from
     their regression cousins. Right-censoring makes pointwise residuals
@@ -1326,18 +1403,38 @@ def _(mo):
     predicted return (censored at last observation otherwise), and
     compute the empirical KM curve on each simulated cohort.
 
+    Before drawing those events we swap `X_data` back to the training
+    person-month rows and keep `sample_vars=["eta"]` so `pymc-bart` walks the
+    fitted trees rather than the prior mean. The subject-level reconstruction
+    uses the same `max(1, ceil(time_months))` expansion rule as the data-prep
+    cell, so the reconstructed row offsets line up with the original
+    person-month table.
+
     If the observed KM lands inside the cloud of simulated KMs, BART is
-    well calibrated against the marginal survival distribution. A
-    systematic deviation indicates structural mis-calibration that the
-    contrast panels would not surface.
+    calibrated against the marginal survival distribution implied by the
+    right-censoring model. A systematic deviation indicates structural
+    mis-calibration that the contrast panels would not surface; career-ending
+    competing events remain outside this check.
     """)
     return
 
 
 @app.cell
-def _(RANDOM_SEED, idata_surv, model_surv, pm, surv_X):
-    # Re-attach X_data to the training rows (it was last set to
-    # X_profiles); sample_vars=["eta"] is required for pymc-bart.
+def _(
+    RANDOM_SEED,
+    idata_surv,
+    mo,
+    model_surv,
+    pm,
+    run_survival_extensions,
+    surv_X,
+):
+    mo.stop(
+        not run_survival_extensions.value,
+        mo.md(
+            "Click **Run optional survival checks and take-home extensions** to run the KM PPC."
+        ),
+    )
     with model_surv:
         pm.set_data({"X_data": surv_X})
         pp_train = pm.sample_posterior_predictive(
@@ -1351,13 +1448,9 @@ def _(RANDOM_SEED, idata_surv, model_surv, pm, surv_X):
 
 @app.cell(hide_code=True)
 def _(RANDOM_SEED, S_km, km_survival, np, plt, pp_train, times, tj_df):
-    # Reconstruct per-subject row offsets from the same expansion rule
-    # the data prep used (max(1, ceil(time_months)) periods per subject).
     _n_periods = np.maximum(1, np.ceil(tj_df["time_months"].to_numpy())).astype(int)
     _subject_starts = np.concatenate([[0], np.cumsum(_n_periods)])
     _n_subjects = len(_n_periods)
-
-    # Stack chain/draw, pick 100 random columns, integer-typed for speed.
     _event_draws = (
         pp_train.posterior_predictive["event"].stack(sample=("chain", "draw")).values
     )
@@ -1417,16 +1510,18 @@ def _(RANDOM_SEED, S_km, km_survival, np, plt, pp_train, times, tj_df):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Restricted mean survival time
+    ### Live path: restricted mean survival time
 
     The contrast panels are easy to read but hard to quote. Restricted
     mean survival time at 36 months,
     $\text{RMST}(36) = \sum_{t=1}^{36} S(t \mid x),$
     collapses each curve into one number: the expected number of months
     out of the next three years the pitcher spends *not* yet returned.
-    Pre-summing over `t` lets us print BART and the cloglog GLM side by
+    Pre-summing over `t` lets us display BART and the cloglog GLM side by
     side with 90% credible intervals, so the disagreements between the
-    two models become numerical rather than purely visual.
+    two models become numerical rather than purely visual. Interpret the
+    values under the right-censoring assumption; competing career-ending
+    non-returns can push them upward.
     """)
     return
 
@@ -1461,7 +1556,7 @@ def _(S_curves, S_glm_curves, np, pl, profile_names):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Which covariates drive the hazard?
+    ## Take-home extension: which covariates drive the hazard?
 
     Variable importance for BART comes in two flavours. **Forward**
     inclusion ("VI", the default) counts how often each variable is used
@@ -1486,12 +1581,20 @@ def _(
     eta,
     feature_names,
     idata_surv,
+    mo,
     model_surv,
     plt,
     pm,
     pmb,
+    run_survival_extensions,
     surv_X,
 ):
+    mo.stop(
+        not run_survival_extensions.value,
+        mo.md(
+            "Click **Run optional survival checks and take-home extensions** to compute survival variable importance."
+        ),
+    )
     with model_surv:
         pm.set_data({"X_data": surv_X})
         _vi_fwd = pmb.compute_variable_importance(
@@ -1514,7 +1617,7 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Partial dependence
+    ### Take-home extension: partial dependence
 
     Partial dependence plots show the marginal effect of each feature
     on the latent log interval hazard, averaging the tree-sum
@@ -1528,7 +1631,13 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(eta, model_surv, pm, pmb, surv_X, surv_y):
+def _(eta, mo, model_surv, pm, pmb, run_survival_extensions, surv_X, surv_y):
+    mo.stop(
+        not run_survival_extensions.value,
+        mo.md(
+            "Click **Run optional survival checks and take-home extensions** to draw survival PDPs."
+        ),
+    )
     with model_surv:
         pm.set_data({"X_data": surv_X})
         pmb.plot_pdp(
@@ -1543,7 +1652,7 @@ def _(eta, model_surv, pm, pmb, surv_X, surv_y):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### From PDP to ICE: individual conditional expectations
+    ### Take-home extension: from PDP to ICE: individual conditional expectations
 
     The partial dependence plots above marginalize each covariate's
     effect *across* the person-month rows: one curve per variable,
@@ -1570,7 +1679,23 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(RANDOM_SEED, eta, model_surv, pm, pmb, surv_X, surv_y):
+def _(
+    RANDOM_SEED,
+    eta,
+    mo,
+    model_surv,
+    pm,
+    pmb,
+    run_survival_extensions,
+    surv_X,
+    surv_y,
+):
+    mo.stop(
+        not run_survival_extensions.value,
+        mo.md(
+            "Click **Run optional survival checks and take-home extensions** to draw ICE curves."
+        ),
+    )
     with model_surv:
         pm.set_data({"X_data": surv_X})
         pmb.plot_ice(
@@ -1582,6 +1707,30 @@ def _(RANDOM_SEED, eta, model_surv, pm, pmb, surv_X, surv_y):
             centered=True,
             random_seed=RANDOM_SEED,
         )
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Survival wrap-up
+
+    Discrete-time survival turns time-to-event modeling into person-month
+    binary modeling: each row asks whether the player returned this month,
+    conditional on still being at risk. BART and the cloglog GLM share the
+    same hazard link, but differ in the function class inside the link:
+    linear additive effects for the GLM, a flexible tree sum for BART.
+
+    The plots answer different stakeholder questions. Survival curves show
+    the probability of still not returned by month $t$; hazards show the
+    month-by-month return window; interval hazard ratios test proportional
+    hazards; RMST compresses a curve into one quoteable number. BART can reveal
+    non-PH patterns that a Cox-style model would flatten, while ICE curves
+    connect the model back to individualized risk. The competing-risks caveat
+    remains: treating career-ending non-returns as censoring can bias survival
+    curves upward, so a subdistribution-hazard model is the next step for a
+    production analysis.
+    """)
     return
 
 
