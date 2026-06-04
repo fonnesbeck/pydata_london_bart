@@ -39,14 +39,8 @@ def _(mo):
     person-time data. Survival follows from the hazards:
     $$S(t \mid x) = \prod_{s \le t} \bigl(1 - h(s \mid x)\bigr).$$
 
-    The notebook has a **Live path** and optional checks:
-
-    1. **Optional / pre-run machinery check.** A synthetic dataset with known
-       truth verifies that BART can recover a non-proportional-hazards effect
-       that a no-interaction linear cloglog GLM cannot represent.
-    2. **Live path: the real Tommy John data.** We use the same discrete-time
-       hazard machinery as a flexible alternative to a Cox-PH-style analysis
-       on real data whose true structure is unknown.
+    BART gives a flexible alternative to a proportional-hazards analysis
+    when the shape of the hazard is not known in advance.
     """)
     return
 
@@ -70,28 +64,10 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
-    run_survival_extensions = mo.ui.run_button(
-        label="Run optional survival checks and take-home extensions"
-    )
-    mo.md(
-        """
-        **Optional / pre-run and take-home:** clinical context, the synthetic
-        machinery check, posterior-predictive KM check, hazard-panel expansion,
-        and VI/PDP/ICE tail are useful follow-up material. Click the button
-        only when you want to execute those heavier sections.
-
-        {button}
-        """
-    ).batch(button=run_survival_extensions)
-    return (run_survival_extensions,)
-
-
-@app.cell(hide_code=True)
-def _(mo):
     mo.vstack(
         [
             mo.md(r"""
-            ## Optional / pre-run: Tommy John clinical context
+            ## Tommy John clinical context
 
             Tommy John surgery rebuilds the elbow's **ulnar collateral ligament
             (UCL)**, the medial ligament that resists the valgus stress of
@@ -123,462 +99,10 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Optional / pre-run: a constructed machinery check
+    ## The real Tommy John data
 
-    Before fitting BART on real Tommy John data, we check the
-    machinery end-to-end on a synthetic dataset where the truth is
-    known. This is not a fair contest between BART and the cloglog
-    GLM; it is a pre-run verification that the survival-BART machinery
-    can recover a pattern we deliberately put into the data. The DGP below
-    mirrors the real-data feature layout (person-time discrete hazards on a
-    36-month horizon, 7 covariates) but keeps the signal deliberately simple:
-    only the time block, revision indicator, and their interaction matter.
-
-    The non-proportional-hazards effect is about the **interval
-    cumulative hazard ratio**, not the baseline recovery-time shape.
-    For the reference profile, untreated subjects have interval hazard
-    $\Lambda_0(t)$; treated subjects have a three-step multiplier:
-    $\Lambda_1(t) / \Lambda_0(t) = 1$ for months 1--12,
-    $2$ for months 13--24, and $3$ for months 25--36. A GLM without a
-    time-by-treatment interaction term has no parameter to represent
-    that changing ratio; the cloglog PH form forces a constant HR.
-
-    This warmup is intentionally a **balanced person-time risk set**:
-    we generate the same number of synthetic rows for every month and
-    revision status rather than simulating a full cohort and dropping
-    subjects after their first return. That is less realistic, but it is
-    the right design for a machinery check. It removes late-month risk-set
-    attrition, so the known non-PH signal is identifiable at every month.
-    The true contrast is deliberately piecewise-constant because BART is
-    a sum of trees; this is a machinery check, so the synthetic truth
-    should be recoverable rather than merely directionally suggestive.
-
-    Age, year, day-of-year, throwing hand, and surgeon are included as
-    noise covariates solely to keep the same feature layout as the real
-    data. The question we're answering is therefore not "which model
-    wins" but "does the BART machinery recover what we put in?" —
-    specifically:
-
-    - time block and revision high in variable importance;
-    - noise covariates low;
-    - the stepwise HR(t) curve recovered by BART while the GLM stays flat
-      by construction.
-
-    Once the machinery check is understood, the live path can skip the fit
-    details and move to the real Tommy John data whose structure we do not know.
-    """)
-    return
-
-
-@app.cell
-def _(RANDOM_SEED, np):
-    def _baseline_hazard(t):
-        return 0.03 + 0.10 * np.exp(-0.5 * ((np.log(t) - np.log(18)) ** 2) / 0.55)
-
-    def simulate_balanced_person_time(n_per_cell=1000, max_t=36, seed=0):
-        sim_rng = np.random.default_rng(seed)
-
-        rows = []
-        for t in range(1, max_t + 1):
-            base_lambda = _baseline_hazard(t)
-            if t <= 12:
-                t_block = 0
-            elif t <= 24:
-                t_block = 1
-            else:
-                t_block = 2
-            for rev_value in [0, 1]:
-                for _row in range(n_per_cell):
-                    age = sim_rng.uniform(20, 40)
-                    year = sim_rng.uniform(1995, 2025)
-                    doy = sim_rng.uniform(0, 1)
-                    throws = sim_rng.integers(0, 2)
-                    surgeon = sim_rng.integers(0, 5)
-
-                    age_eff = 1.0
-                    year_eff = 1.0
-                    surg_eff = 1.0
-                    if t <= 12:
-                        true_interval_hr = 1.0
-                    elif t <= 24:
-                        true_interval_hr = 2.0
-                    else:
-                        true_interval_hr = 3.0
-                    treat_eff = 1.0 if rev_value == 0 else true_interval_hr
-                    interval_hazard = (
-                        base_lambda * age_eff * year_eff * surg_eff * treat_eff
-                    )
-                    h = 1.0 - np.exp(-interval_hazard)
-                    event = int(sim_rng.random() < h)
-                    rows.append(
-                        (t, t_block, age, year, doy, throws, rev_value, surgeon, event)
-                    )
-
-        arr = np.array(rows, dtype=float)
-        sim_t = arr[:, 0].astype(int)
-        return sim_t, arr[:, 1:8], arr[:, 8].astype(int)
-
-    sim_t, sim_X, sim_y = simulate_balanced_person_time(
-        n_per_cell=1000, max_t=36, seed=RANDOM_SEED
-    )
-    sim_q_idx = ((sim_t - 1) // 3).astype(int)
-    f"sim_X shape {sim_X.shape}, events {int(sim_y.sum())}"
-    return sim_X, sim_q_idx, sim_y
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    The GLM comparator needs a conventional design matrix: standardized
-    `age` and `year`, the binary indicators as-is, K−1 dummies for the
-    5-level surgeon category (reference = level 0), and `doy` passing
-    through as the [0, 1] noise feature; its time baseline enters
-    separately through the quarterly `sim_q_idx`. BART instead takes the
-    raw covariate matrix. The split-rule idea is the same as
-    **Shared mechanics: split rules for typed columns** in `01_regression.py`:
-    subset splits for the 3-level time block and surgeon category, continuous
-    splits for `age`/`year`/`doy`, and one-hot splits for binary `throws` and
-    `rev`.
-    """)
-    return
-
-
-@app.cell
-def _(np, pmb, sim_X):
-    sim_age_mean, sim_age_sd = sim_X[:, 1].mean(), sim_X[:, 1].std()
-    sim_year_mean, sim_year_sd = sim_X[:, 2].mean(), sim_X[:, 2].std()
-
-    sim_surg_codes = sim_X[:, 6].astype(int)
-    sim_surg_dummies = np.zeros((sim_X.shape[0], 4))
-    for _col, _level in enumerate([1, 2, 3, 4]):
-        sim_surg_dummies[:, _col] = (sim_surg_codes == _level).astype(float)
-
-    sim_X_glm = np.column_stack(
-        [
-            (sim_X[:, 1] - sim_age_mean) / sim_age_sd,
-            (sim_X[:, 2] - sim_year_mean) / sim_year_sd,
-            sim_X[:, 3],
-            sim_X[:, 4],
-            sim_X[:, 5],
-            sim_surg_dummies,
-        ]
-    )
-    sim_split_rules = (
-        [pmb.SubsetSplitRule]
-        + [pmb.ContinuousSplitRule] * 3
-        + [pmb.OneHotSplitRule] * 2
-        + [pmb.SubsetSplitRule]
-    )
-    f"sim_X_glm cols {sim_X_glm.shape[1]}"
-    return (
-        sim_X_glm,
-        sim_age_mean,
-        sim_age_sd,
-        sim_split_rules,
-        sim_year_mean,
-        sim_year_sd,
-    )
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    Both models now fit the same simulated person-time rows. The BART
-    fit uses warmup-scale settings — `m=20` trees and 300 draws on 2
-    chains, versus `m=100` and full-length chains on the real data —
-    enough to verify that the known signal is recoverable. The synthetic
-    fit cells are **Optional / pre-run**; read the result and continue if the
-    live session needs to move quickly.
-    """)
-    return
-
-
-@app.cell
-def _(
-    RANDOM_SEED,
-    mo,
-    pm,
-    pmb,
-    run_survival_extensions,
-    sim_X,
-    sim_split_rules,
-    sim_y,
-):
-    mo.stop(
-        not run_survival_extensions.value,
-        mo.md(
-            "Click **Run optional survival checks and take-home extensions** to fit the synthetic BART model."
-        ),
-    )
-    with pm.Model() as model_sim_bart:
-        X_sim_data = pm.Data("X_sim_data", sim_X)
-        eta_sim = pmb.BART(
-            "eta_sim",
-            X=X_sim_data,
-            Y=sim_y.astype(float),
-            m=20,
-            split_rules=sim_split_rules,
-        )
-        h_sim = pm.Deterministic("h_sim", 1.0 - pm.math.exp(-pm.math.exp(eta_sim)))
-        pm.Bernoulli("event_sim", p=h_sim, observed=sim_y, shape=h_sim.shape)
-        idata_sim_bart = pm.sample(
-            draws=300,
-            tune=300,
-            chains=2,
-            cores=1,
-            random_seed=RANDOM_SEED,
-            step=pmb.PGBART(vars=[eta_sim], num_particles=10, batch=(0.1, 0.15)),
-        )
-    return idata_sim_bart, model_sim_bart
-
-
-@app.cell
-def _(
-    RANDOM_SEED,
-    mo,
-    pm,
-    run_survival_extensions,
-    sim_X_glm,
-    sim_q_idx,
-    sim_y,
-):
-    mo.stop(
-        not run_survival_extensions.value,
-        mo.md(
-            "Click **Run optional survival checks and take-home extensions** to fit the synthetic GLM."
-        ),
-    )
-    with pm.Model() as model_sim_glm:
-        X_sim_glm_data = pm.Data("X_sim_glm_data", sim_X_glm)
-        sim_q_idx_data = pm.Data("sim_q_idx_data", sim_q_idx, dims="row")
-        beta_sim = pm.Normal("beta_sim", 0.0, 1.0, shape=sim_X_glm.shape[1])
-        alpha_q_sim = pm.Normal("alpha_q_sim", -3.0, 1.5, shape=12)
-        eta_sim_glm = alpha_q_sim[sim_q_idx_data] + pm.math.dot(
-            X_sim_glm_data, beta_sim
-        )
-        h_sim_glm = pm.Deterministic(
-            "h_sim_glm", 1.0 - pm.math.exp(-pm.math.exp(eta_sim_glm))
-        )
-        pm.Bernoulli(
-            "event_sim_glm", p=h_sim_glm, observed=sim_y, shape=h_sim_glm.shape
-        )
-        idata_sim_glm = pm.sample(random_seed=RANDOM_SEED)
-    return idata_sim_glm, model_sim_glm
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    To read off HR(t), we build a treatment contrast: two 36-month
-    profile sweeps at `rev=0` and `rev=1`, all other covariates pinned
-    at reference values. Each profile is encoded twice — once in the raw
-    BART design (with each month mapped to its time block) and once in
-    the standardized GLM design — so each model's posterior predictive
-    can be evaluated at the same pair of profiles and the interval
-    hazard ratio computed draw by draw.
-    """)
-    return
-
-
-@app.cell
-def _(np, sim_age_mean, sim_age_sd, sim_year_mean, sim_year_sd):
-    sim_times = np.arange(1, 37)
-    sim_ref = dict(age=30.0, year=2010.0, doy=0.5, throws=0, surgeon=0)
-
-    def _sim_profile_bart(rev):
-        n = len(sim_times)
-        return np.column_stack(
-            [
-                np.select([sim_times <= 12, sim_times <= 24], [0, 1], default=2),
-                np.full(n, sim_ref["age"]),
-                np.full(n, sim_ref["year"]),
-                np.full(n, sim_ref["doy"]),
-                np.full(n, sim_ref["throws"]),
-                np.full(n, rev),
-                np.full(n, sim_ref["surgeon"]),
-            ]
-        )
-
-    def _sim_profile_glm(rev):
-        n = len(sim_times)
-        return np.column_stack(
-            [
-                np.full(n, (sim_ref["age"] - sim_age_mean) / sim_age_sd),
-                np.full(n, (sim_ref["year"] - sim_year_mean) / sim_year_sd),
-                np.full(n, sim_ref["doy"]),
-                np.full(n, sim_ref["throws"]),
-                np.full(n, rev),
-                np.zeros((n, 4)),
-            ]
-        )
-
-    sim_X_profiles = np.concatenate(
-        [_sim_profile_bart(0), _sim_profile_bart(1)], axis=0
-    )
-    sim_X_profiles_glm = np.concatenate(
-        [_sim_profile_glm(0), _sim_profile_glm(1)], axis=0
-    )
-    sim_q_idx_profiles = np.tile(((sim_times - 1) // 3).astype(int), 2)
-    return sim_X_profiles, sim_X_profiles_glm, sim_q_idx_profiles, sim_times
-
-
-@app.cell
-def _(RANDOM_SEED, idata_sim_bart, model_sim_bart, pm, sim_X_profiles):
-    with model_sim_bart:
-        pm.set_data({"X_sim_data": sim_X_profiles})
-        pp_sim_bart = pm.sample_posterior_predictive(
-            idata_sim_bart,
-            var_names=["h_sim"],
-            sample_vars=["eta_sim"],
-            predictions=True,
-            random_seed=RANDOM_SEED,
-        )
-    return (pp_sim_bart,)
-
-
-@app.cell
-def _(
-    RANDOM_SEED,
-    idata_sim_glm,
-    model_sim_glm,
-    pm,
-    sim_X_profiles_glm,
-    sim_q_idx_profiles,
-):
-    with model_sim_glm:
-        pm.set_data(
-            {"X_sim_glm_data": sim_X_profiles_glm, "sim_q_idx_data": sim_q_idx_profiles}
-        )
-        pp_sim_glm = pm.sample_posterior_predictive(
-            idata_sim_glm,
-            var_names=["h_sim_glm"],
-            predictions=True,
-            random_seed=RANDOM_SEED,
-        )
-    return (pp_sim_glm,)
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### Optional / pre-run: did we recover the truth?
-
-    The figure below compares three things at the treatment contrast
-    (rev=1 vs rev=0):
-
-    - **True interval HR(t)** (black dashed) = 1, 2, then 3 by
-      construction. This is the ratio of interval cumulative hazards,
-      not the raw event probability.
-    - **BART** (blue, with 90% CrI) reads HR(t) from its posterior
-      predictive at the two profiles.
-    - **Cloglog GLM** (red) reads one constant revision effect, so its
-      interval HR curve is flat.
-
-    This is the expected behavior of the machinery check: BART should recover
-    the step pattern within posterior uncertainty, while the no-interaction PH
-    comparator should land near an average of the three true HR levels.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(np, plt, pp_sim_bart, pp_sim_glm, sim_times):
-    def _sim_band(curves):
-        return curves.mean(axis=0), np.quantile(curves, [0.05, 0.95], axis=0)
-
-    _h_sim_bart = (
-        pp_sim_bart.predictions["h_sim"].stack(sample=("chain", "draw")).values
-    )
-    _h_sim_glm = (
-        pp_sim_glm.predictions["h_sim_glm"].stack(sample=("chain", "draw")).values
-    )
-    _n_t = len(sim_times)
-    _bart_rev0 = _h_sim_bart[:_n_t, :].T
-    _bart_rev1 = _h_sim_bart[_n_t : 2 * _n_t, :].T
-    _glm_rev0 = _h_sim_glm[:_n_t, :].T
-    _glm_rev1 = _h_sim_glm[_n_t : 2 * _n_t, :].T
-
-    def _interval_hazard(_h):
-        return -np.log1p(-np.clip(_h, 0.0, 1.0 - 1e-12))
-
-    _bart_lambda0 = _interval_hazard(_bart_rev0)
-    _bart_lambda1 = _interval_hazard(_bart_rev1)
-    _glm_lambda0 = _interval_hazard(_glm_rev0)
-    _glm_lambda1 = _interval_hazard(_glm_rev1)
-    _bart_hr = _bart_lambda1 / np.clip(_bart_lambda0, 1e-12, None)
-    _glm_hr = _glm_lambda1 / np.clip(_glm_lambda0, 1e-12, None)
-    _bart_med, (_bart_lo, _bart_hi) = (
-        np.median(_bart_hr, axis=0),
-        np.quantile(_bart_hr, [0.05, 0.95], axis=0),
-    )
-    _glm_med, (_glm_lo, _glm_hi) = (
-        np.median(_glm_hr, axis=0),
-        np.quantile(_glm_hr, [0.05, 0.95], axis=0),
-    )
-    _true_hr = np.select([sim_times <= 12, sim_times <= 24], [1.0, 2.0], default=3.0)
-
-    _fig_sim, _ax_sim = plt.subplots(figsize=(9, 5))
-    _ax_sim.fill_between(
-        sim_times, _bart_lo, _bart_hi, step="post", color="#4c72b0", alpha=0.2
-    )
-    _ax_sim.step(
-        sim_times,
-        _bart_med,
-        where="post",
-        color="#4c72b0",
-        linewidth=2,
-        label="BART median (90% CrI)",
-    )
-    _ax_sim.fill_between(
-        sim_times, _glm_lo, _glm_hi, step="post", color="#c44e52", alpha=0.15
-    )
-    _ax_sim.step(
-        sim_times,
-        _glm_med,
-        where="post",
-        color="#c44e52",
-        linewidth=2,
-        linestyle="-",
-        label="cloglog GLM median",
-    )
-    _ax_sim.plot(
-        sim_times,
-        _true_hr,
-        color="black",
-        linewidth=2,
-        linestyle="--",
-        label="True interval HR(t): 1 → 2 → 3",
-    )
-    _ax_sim.axhline(1.0, color="gray", linewidth=0.8, linestyle=":")
-    _ax_sim.set_xlabel("months since surgery")
-    _ax_sim.set_ylabel(r"HR$(t)$ = $\Lambda(t | rev=1) / \Lambda(t | rev=0)$")
-    _ax_sim.set_title(
-        "Recovery of a non-proportional interval hazard from synthetic data"
-    )
-    _ax_sim.legend(frameon=False, loc="upper left")
-    _fig_sim.tight_layout()
-    _fig_sim
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    This is the behavior we want from a synthetic machinery check. The
-    dashed line is the **known interval cumulative hazard ratio** baked
-    into the DGP, not the month-specific event probability itself. Because
-    the warmup uses a balanced person-time risk set and a tree-friendly
-    step-function truth, BART should recover the main step pattern rather
-    than merely show the correct direction. The cloglog GLM is expected
-    to be flat because its no-interaction PH specification can only
-    estimate one average rev effect over all months. That flat red line
-    is the expected failure mode of the comparator, not a sampling bug.
-
-    ## Live path: the real data
-
-    With the machinery validated on a known DGP, we apply the same
-    discrete-time hazard BART (and its cloglog GLM comparator) to the
-    Roegele Tommy John surgery list.
+    We apply the discrete-time hazard BART, alongside a cloglog GLM
+    comparator, to the Roegele Tommy John surgery list.
 
     We keep all professional levels and all positions (not just MLB
     pitchers), so BART sees the full range of recovery trajectories
@@ -590,10 +114,9 @@ def _(mo):
     horizon is imposed: anyone still not returned by then is censored
     at $t = 36$.
 
-    The data-subsample control below defaults to 500 subjects, which
-    keeps the person-month expansion to roughly 12k rows and the
-    live-tutorial BART fit to roughly 6 minutes. The seed is fixed so
-    attendees see the same numbers we do.
+    The data-subsample control below defaults to 500 subjects, which keeps the
+    person-month expansion to roughly 12k rows. The fixed seed makes the
+    displayed subset reproducible.
     """)
     return
 
@@ -654,28 +177,28 @@ def _(HORIZON, RANDOM_SEED, subsample, tj_all):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### A note on censoring vs competing events
-
-    The discrete-time hazard model below treats every row with
+    > ### Censoring vs competing events
+    >
+    > The discrete-time hazard model below treats every row with
     `event=0` as standard right-censoring: the subject was still at
     risk when our observation ended, and could in principle have
     returned later. That's the right interpretation for someone who
     is still in rehab as of the data pull.
-
-    It's the wrong interpretation for a pitcher whose career ended
+    >
+    > It's the *wrong* interpretation for a pitcher whose career ended
     without a return. Roegele's data dictionary classifies 64% of
     non-returns as exactly this — *competing events* (`active=0`
     with no return), not right-censoring. Treating career-enders as
     "still at risk" implicitly assumes they would have come back
     eventually, which biases the modelled survival curves upward.
-
-    The 36-month administrative horizon helps the worst cases (anyone
-    Roegele has lost track of for years) but does not address
-    competing events inside the horizon. The honest fix is a
-    competing-risks model. Sparapani et al. (2020, *SMMR* 29:57-77)
-    extend BART to subdistribution hazards for exactly this setup;
-    we treat that as out of scope for this notebook and carry the
-    direction of bias through the interpretation below.
+    >
+    > The 36-month administrative horizon helps the worst cases (anyone
+    that has been lost track of) but does not address
+    competing events inside the horizon.
+    >
+    > The best solution to this issue is a
+    **competing-risks model**. Sparapani et al. (2020, *SMMR* 29:57-77)
+    extend BART to subdistribution hazards for exactly this setup.
     """)
     return
 
@@ -696,8 +219,9 @@ def _(mo):
     Categorical columns are integer-coded against sorted level lists
     that we keep around, so prediction profiles later encode levels by
     name (`surgeon_levels.index(...)`) rather than hardcoding codes.
-    As in **Shared mechanics: split rules for typed columns**, `split_rules`
-    assigns each column the right tree geometry: continuous splits for
+    Using the same typed split-rule assignment introduced in the regression
+    notebook, `split_rules` assigns each column the right tree geometry:
+    continuous splits for
     `t`/`age`/`year`/`doy`, one-hot for binary `throws` and `revision`, and
     subset splits for the 10-level surgeon group. We use `max(1, ceil(time))`
     in the expansion so the rare same-day censor still contributes one
@@ -923,11 +447,9 @@ def _(RANDOM_SEED, pm, pmb, split_rules, surv_X, surv_y):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    The same convergence checks as the GLM, adapted to the BART fit:
+    The same convergence view as before, adapted to the BART fit:
     `az.plot_convergence_dist` shows the distributions of R-hat and ESS
-    across the elements of the latent `eta`. Divergences are an
-    HMC-specific diagnostic; PGBART is the only step method in this
-    model, so the divergence count does not apply.
+    across the elements of the latent `eta`.
     """)
     return
 
@@ -938,21 +460,10 @@ def _(az, idata_surv):
     return
 
 
-@app.cell
-def _(idata_surv):
-    _stats = idata_surv.sample_stats
-    (
-        f"divergences: {int(_stats['diverging'].sum())}"
-        if "diverging" in _stats
-        else "PGBART-only model (no HMC step); divergence diagnostic not applicable"
-    )
-    return
-
-
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Live path: covariate contrast profiles
+    ### Covariate contrast profiles
 
     To see what the two fits imply, we evaluate both posteriors at a
     grid of covariate profiles. The reference profile holds each
@@ -965,9 +476,9 @@ def _(mo):
     Every profile is encoded twice — `X_profiles` in the raw 7-column
     BART design and `X_profiles_glm` in the wide GLM design — and
     `q_idx_profiles` maps each profile row to its quarter for the
-    GLM's $\alpha_q$ baseline. As in **Shared mechanics: posterior prediction
-    with `pm.Data`**, we swap these profile rows into the fitted models before
-    sampling. For the GLM, `h_glm` is a Deterministic of `alpha_q` and `beta`,
+    GLM's $\alpha_q$ baseline. Following the `pm.Data` / `pm.set_data`
+    prediction pattern from the regression notebook, we swap these profile
+    rows into the fitted models before sampling. For the GLM, `h_glm` is a Deterministic of `alpha_q` and `beta`,
     so we also reattach `q_idx_data` and sample hazard draws directly.
     """)
     return
@@ -1077,7 +588,7 @@ def _(RANDOM_SEED, X_profiles_glm, idata_glm, model_glm, pm, q_idx_profiles):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Live path: survival curves
+    ### Survival curves
 
     From hazard draws to survival curves: each profile contributes 36
     consecutive rows of the posterior predictive, which are sliced out
@@ -1219,8 +730,23 @@ def _(S_curves, S_glm_curves, S_km, np, plt, times):
 
 @app.cell(hide_code=True)
 def _(mo):
+    run_survival_extensions = mo.ui.run_button(label="Run survival computations")
+    mo.md(
+        """
+        The button below starts the longer-running survival computations:
+        the hazard panels, the posterior-predictive Kaplan-Meier check,
+        variable importance, PDP, and ICE.
+
+        {button}
+        """
+    ).batch(button=run_survival_extensions)
+    return (run_survival_extensions,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
     mo.md(r"""
-    ### Optional / pre-run: hazards behind the survival curves
+    ### Hazards behind the survival curves
 
     Survival is the cumulative product
     $S(t \mid x) = \prod_{s \le t}(1 - h(s \mid x))$, but what BART
@@ -1242,9 +768,7 @@ def _(mo):
 def _(h_curves, h_glm_curves, mo, np, plt, run_survival_extensions, times):
     mo.stop(
         not run_survival_extensions.value,
-        mo.md(
-            "Click **Run optional survival checks and take-home extensions** to draw the hazard panel."
-        ),
+        mo.md("Click **Run survival computations** to draw the hazard panel."),
     )
 
     def _band_h(curves):
@@ -1323,7 +847,7 @@ def _(h_curves, h_glm_curves, mo, np, plt, run_survival_extensions, times):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Live path: does the proportional-hazards assumption hold?
+    ### Does the proportional-hazards assumption hold?
 
     The GLM comparator above assumes a constant interval cumulative hazard
     ratio over time. BART does not have to: the same cloglog link is wrapped
@@ -1392,7 +916,7 @@ def _(age_sd_glm, h_curves, idata_glm, np, plt, times):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Optional / pre-run: posterior-predictive Kaplan-Meier check
+    ### Posterior-predictive Kaplan-Meier check
 
     Posterior-predictive checks for survival data look different from
     their regression cousins. Right-censoring makes pointwise residuals
@@ -1431,9 +955,7 @@ def _(
 ):
     mo.stop(
         not run_survival_extensions.value,
-        mo.md(
-            "Click **Run optional survival checks and take-home extensions** to run the KM PPC."
-        ),
+        mo.md("Click **Run survival computations** to run the KM PPC."),
     )
     with model_surv:
         pm.set_data({"X_data": surv_X})
@@ -1510,7 +1032,7 @@ def _(RANDOM_SEED, S_km, km_survival, np, plt, pp_train, times, tj_df):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Live path: restricted mean survival time
+    ### Restricted mean survival time
 
     The contrast panels are easy to read but hard to quote. Restricted
     mean survival time at 36 months,
@@ -1556,21 +1078,17 @@ def _(S_curves, S_glm_curves, np, pl, profile_names):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Take-home extension: which covariates drive the hazard?
+    ## Which covariates drive the hazard?
 
-    Variable importance for BART comes in two flavours. **Forward**
-    inclusion ("VI", the default) counts how often each variable is used
-    in the posterior trees. **Backward** elimination instead refits
-    restricted submodels by dropping features one at a time and reports
-    $R^2$ against the full model as features come back in. Forward is
-    fast and good at ranking; backward is slower but more honest about
-    correlated features that the forward count may double-credit.
+    **Forward** inclusion ("VI", the default) counts how often each
+    variable is used as a splitting variable across the posterior trees.
+    The classification notebook contrasts this with backward elimination,
+    which refits restricted submodels to disentangle correlated features;
+    here the fast forward ranking is enough.
 
     The seven columns are time `t`, `age`, `surgery_year`,
     `surgery_doy_frac`, `throws`, `revision`, and `surgeon_group`. We
-    expect `t` to dominate either way (the hazard is highly time-shaped);
-    secondary ranks may differ between methods if any two covariates
-    carry correlated signal.
+    expect `t` to dominate (the hazard is highly time-shaped).
     """)
     return
 
@@ -1592,7 +1110,7 @@ def _(
     mo.stop(
         not run_survival_extensions.value,
         mo.md(
-            "Click **Run optional survival checks and take-home extensions** to compute survival variable importance."
+            "Click **Run survival computations** to compute survival variable importance."
         ),
     )
     with model_surv:
@@ -1600,15 +1118,10 @@ def _(
         _vi_fwd = pmb.compute_variable_importance(
             idata_surv, eta, surv_X, method="VI", random_seed=RANDOM_SEED
         )
-        _vi_back = pmb.compute_variable_importance(
-            idata_surv, eta, surv_X, method="backward", random_seed=RANDOM_SEED
-        )
 
-    _fig_vi, _axes_vi = plt.subplots(1, 2, figsize=(13, 4.5))
-    pmb.plot_variable_importance(_vi_fwd, labels=feature_names, ax=_axes_vi[0])
-    pmb.plot_variable_importance(_vi_back, labels=feature_names, ax=_axes_vi[1])
-    _axes_vi[0].set_title("Forward (inclusion-frequency)")
-    _axes_vi[1].set_title("Backward (elimination)")
+    _fig_vi, _ax_vi = plt.subplots(figsize=(7, 4.5))
+    pmb.plot_variable_importance(_vi_fwd, labels=feature_names, ax=_ax_vi)
+    _ax_vi.set_title("Forward (inclusion-frequency)")
     _fig_vi.tight_layout()
     _fig_vi
     return
@@ -1617,7 +1130,7 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Take-home extension: partial dependence
+    ### Partial dependence
 
     Partial dependence plots show the marginal effect of each feature
     on the latent log interval hazard, averaging the tree-sum
@@ -1634,9 +1147,7 @@ def _(mo):
 def _(eta, mo, model_surv, pm, pmb, run_survival_extensions, surv_X, surv_y):
     mo.stop(
         not run_survival_extensions.value,
-        mo.md(
-            "Click **Run optional survival checks and take-home extensions** to draw survival PDPs."
-        ),
+        mo.md("Click **Run survival computations** to draw survival PDPs."),
     )
     with model_surv:
         pm.set_data({"X_data": surv_X})
@@ -1652,7 +1163,7 @@ def _(eta, mo, model_surv, pm, pmb, run_survival_extensions, surv_X, surv_y):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Take-home extension: from PDP to ICE: individual conditional expectations
+    ### From PDP to ICE: individual conditional expectations
 
     The partial dependence plots above marginalize each covariate's
     effect *across* the person-month rows: one curve per variable,
@@ -1692,9 +1203,7 @@ def _(
 ):
     mo.stop(
         not run_survival_extensions.value,
-        mo.md(
-            "Click **Run optional survival checks and take-home extensions** to draw ICE curves."
-        ),
+        mo.md("Click **Run survival computations** to draw ICE curves."),
     )
     with model_surv:
         pm.set_data({"X_data": surv_X})

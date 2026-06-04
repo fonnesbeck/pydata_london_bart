@@ -17,9 +17,9 @@ application notebooks:
 
 - **`slides/how_bart_works.py` — How BART works (25 min):** Bayesian inference and MCMC primer; sum-of-weak-trees; regularization priors that prevent overfitting; posterior inference over tree structures; why this gives calibrated uncertainty. Built bottom-up in pure NumPy so the sampler reads top-to-bottom.
 - **Break (5 min)**
-- **`01_regression.py` — BART for regression (25 min, hands-on):** Live path: fit a first `pymc-bart` model, visualize posterior predictive uncertainty, check diagnostics, and read variable-importance / partial-dependence plots. Optional / pre-run sections cover model escalation and tree-count selection. 2024 Formula 1 lap times across five Grands Prix (Bahrain, Monaco, Spain, Britain, Monza).
-- **`02_classification.py` — BART for classification (15 min, hands-on):** **Live path:** predicted probabilities with uncertainty (not just class labels), reliability, and a logistic-regression baseline on the same held-out split. **Take-home extension:** ordered probit on the full life-satisfaction scale.
-- **`03_survival.py` — BART for survival analysis (15 min, hands-on):** **Live path:** a short survival primer, discrete-time hazards, survival curves with credible intervals, and individualized risk assessment. **Optional / pre-run:** synthetic checks and proportional-hazards diagnostics. **Take-home extension:** variable-importance and PDP/ICE follow-ups.
+- **`01_regression.py` — BART for regression (25 min, hands-on):** Fit a first `pymc-bart` model on 2024 Formula 1 lap times, check posterior predictive uncertainty on held-out laps, interpret variable importance and partial dependence, then use the diagnostics to motivate a richer F1 model and a tree-count comparison.
+- **`02_classification.py` — BART for classification (15 min, hands-on):** Predict whether GSS respondents report very high life satisfaction, check held-out probabilities and reliability, compare against logistic regression, then return to the full 1–10 ladder with an ordered-probit BART model.
+- **`03_survival.py` — BART for survival analysis (15 min, hands-on):** Model Tommy John surgery recovery with discrete-time hazards, compare BART with a proportional-hazards GLM, read survival curves and individualized risk summaries, then inspect variable importance, PDP, and ICE plots.
 - **Wrap-up (5 min):** When to use BART vs. alternatives; resources for further learning
 
 
@@ -31,6 +31,11 @@ pixi run marimo edit 01_regression.py              # author / teach in the brows
 pixi run marimo check 0[1-3]_*.py slides/how_bart_works.py  # structural validation
 ```
 
+## Notebook writing conventions
+
+- Put explanation in markdown cells; keep code comments local to implementation details.
+- Use plain teaching transitions instead of workflow labels.
+- Keep each notebook moving through the same arc: introduce the problem, fit, check, interpret, extend.
 
 ## Description
 

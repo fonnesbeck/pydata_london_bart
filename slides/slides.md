@@ -60,14 +60,26 @@ color: navy
 
 # So what is BART?
 
-- Structurally like **gradient boosting** — a prediction is a *sum of many small trees*.
-- Behaviourally like a **random forest** — each tree is a *weak learner*; the ensemble is their consensus.
-- But **Bayesian**: the sampler returns a *posterior over functions*, so every prediction carries the credible band you just saw.
+<div class="bart-essence">
+  <div class="bart-row">
+    <div class="bart-label">Structure</div>
+    <div class="bart-text"><span class="bart-lead">Like gradient boosting</span> — a prediction is a sum of many small trees.</div>
+  </div>
+  <div class="bart-row">
+    <div class="bart-label">Fitting</div>
+    <div class="bart-text"><span class="bart-lead">Not stagewise boosting</span> — posterior backfitting, not greedy residual chasing.</div>
+  </div>
+  <div class="bart-row">
+    <div class="bart-label">Output</div>
+    <div class="bart-text"><span class="bart-lead">Bayesian</span> — posterior draws over functions give credible bands.</div>
+  </div>
+</div>
 
 <!--
-- Chipman, George & McCulloch (2010) state the boosting/RF lineage in the original paper.
-- The novelty is HOW trees are generated: a Bayesian MH move over tree structure, not a greedy gradient step. (We build that next.)
-- One method, many outcomes: regression, classification, survival — swap the likelihood, same sampler. Notebooks 02–04.
+- Weak learner is not the distinction; boosting uses weak learners too.
+- Structure: same additive sum-of-trees idea.
+- Fitting: backfit through the posterior, not greedy residual chasing.
+- Output: function draws give the credible bands.
 -->
 
 ---
@@ -104,7 +116,6 @@ $$\Large P(\theta \mid D) = \frac{P(D \mid \theta)\,P(\theta)}{P(D)}$$
 | $P(D)$ | **evidence** — marginal likelihood |
 | $P(\theta \mid D)$ | **posterior** — updated belief |
 
-The evidence $P(D)$ only rescales, so **posterior ∝ likelihood × prior** — and that **prior is regularization** (L2 weight decay, a `max_depth` cap, shrinkage).
 
 <!--
 - A parameter is a distribution, not a single value; prior, updated by likelihood, yields posterior.
@@ -566,17 +577,6 @@ A point estimate *and* its uncertainty, from one fit.
 - Mean for the prediction, spread for the band — BART speaks in credible intervals.
 -->
 
----
-
-# Calibration check on Friedman
-
-<img src="/images/coverage.png" class="mx-auto max-h-90" />
-
-<!--
-- Friedman DGP: the true f and true sigma are both known.
-- 90% intervals cover ~90% of the truth, in-sample AND out-of-sample. Points near the diagonal.
-- The sampler is calibrated.
--->
 
 ---
 layout: section
@@ -611,50 +611,6 @@ color: navy
 -->
 
 ---
-layout: section
-color: navy
----
-
-# Interpreting the fit
-
-<!-- Two diagnostics come free from the posterior. -->
-
----
-
-# Variable importance: restricted R²
-
-$$\small R^2_k = 1 - \frac{\operatorname{Var}\!\bigl(\hat f^{\text{full}}(x) - \hat f^{\text{restricted}}_k(x)\bigr)}{\operatorname{Var}\!\bigl(\hat f^{\text{full}}(x)\bigr)}$$
-
-<img src="/images/restricted_r2.png" class="mx-auto max-h-72 mt-2" />
-
-<!-- Prune posterior trees to a top-k subset, predict, compare to the full model. Reuses the trees we already drew. Curve flattens at the 5 relevant Friedman variables. -->
-
----
-
-# Partial dependence & ICE
-
-$$\small \mathrm{PD}_j(v) = \frac{1}{n}\sum_{i=1}^{n} f\!\left(x_i^{(j \to v)}\right) \qquad \mathrm{ICE}_{j,i}(v) = f\!\left(x_i^{(j \to v)}\right)$$
-
-<img src="/images/pdp.png" class="mx-auto max-h-65 mt-2" />
-
-<!--
-- PDP: average the counterfactual prediction over all rows — the marginal shape of x_j.
-- BART gives a posterior over the PDP for free.
--->
-
----
-
-# ICE: the per-row curves behind the PDP
-
-<img src="/images/ice.png" class="mx-auto max-h-90" />
-
-<!--
-- Parallel curves ⇒ additive feature; crossing curves ⇒ interaction.
-- pymc-bart ships pmb.plot_pdp and pmb.plot_ice.
-- `01_regression.py` uses plot_pdp; `03_survival.py` uses plot_ice (per-individual hazard).
--->
-
----
 layout: center
 ---
 
@@ -673,49 +629,6 @@ This is the sampler `pymc-bart` uses by default — exposed in `03_survival.py` 
 
 ---
 layout: section
-color: navy
----
-
-# Sparsity in high-dimensional X
-
-#### Linero's prior
-
----
-
-# Dirichlet–categorical split selection
-
-When most of $p$ covariates are noise, uniform splitting wastes proposals. Linero (2018):
-
-$$s \sim \operatorname{Dir}\!\left(\tfrac{a}{p}, \dots, \tfrac{a}{p}\right), \qquad v \mid s \sim \operatorname{Cat}(s)$$
-
-<img src="/images/sparse_compare.png" class="mx-auto max-h-60 mt-2" />
-
-<!--
-- Small a concentrates on a few variables; large a approaches uniform.
-- s is updated adaptively during burn-in, then frozen.
-- Reinforcement dynamic: needs room (more trees, longer adaptive phase) to be robust.
--->
-
----
-layout: center
----
-
-# When to reach for it
-
-<div class="text-xl leading-relaxed">
-
-- Suspect **most columns are irrelevant** — genomics, drug discovery, "throw everything at it".
-
-- Give it room: more trees, a longer adaptive phase, sometimes a prior on $a$ itself.
-
-- Production version: the `split_prior` argument of `pmb.BART` (`02_classification.py`).
-
-</div>
-
-<!-- The from-scratch version shows the mechanism, not the tuning that makes it robust. -->
-
----
-layout: section
 color: black
 class: text-center
 slide_info: false
@@ -726,6 +639,6 @@ slide_info: false
 <!--
 - Hand off to the pymc-bart application notebooks.
 - 02: F1 lap times, the Student-T escalation, the m-sweep.
-- 03: probit classification + GSS ordered probit, the sparsity prior.
+- 03: probit classification + GSS ordered probit.
 - 04: discrete-time survival, explicit PGBART step.
 -->

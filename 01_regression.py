@@ -1,17 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = [
-#     "marimo",
-#     "pymc>=5.28",
-#     "pymc-bart>=0.11",
-#     "arviz>=0.23",
-#     "numpy>=2",
-#     "matplotlib>=3.10",
-#     "polars>=1.0",
-#     "fastf1>=3.8",
-# ]
-# ///
-
 import marimo
 
 __generated_with = "0.23.5"
@@ -33,10 +19,9 @@ def _(mo):
     Spain in the middle) and include dry, hot, and wet phases. An 80/20
     random split holds out roughly 1000 laps for testing.
 
-    **Live path.** For the timed tutorial, focus on the baseline fit,
-    posterior predictive checks, held-out prediction, variable importance,
-    and partial dependence. **Optional / pre-run** sections later diagnose the
-    F1 misfit, escalate the model, and compare tree counts with PSIS-LOO.
+    We start with a baseline BART fit, check its predictive calibration on
+    held-out laps, and then use those checks to motivate a richer F1 model
+    and a short tree-count comparison.
     """)
     return
 
@@ -47,9 +32,10 @@ def _(mo):
     ### Runtime setup
 
     `pymc-bart` creates a multiprocessing manager, so on Python 3.14 we force
-    the `"fork"` start method. That keeps the notebook runnable both in marimo
-    edit mode and as a plain `python` script, where the default `forkserver`
-    would re-import the module and miss the `if __name__ == "__main__"` guard.
+    the `"fork"` start method. That keeps the notebook runnable both in the
+    marimo editor and as a plain `python` script, where the default
+    `forkserver` would re-import the module and miss the
+    `if __name__ == "__main__"` guard.
     """)
     return
 
@@ -127,7 +113,7 @@ def _(f1_df, mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Shared mechanics: split rules for typed columns
+    ### Split rules for categorical columns
 
     Two of our features are unordered categoricals. The default
     `ContinuousSplitRule` would treat their integer codes as ordered,
@@ -143,8 +129,8 @@ def _(mo):
 
     For tyre compound (four levels) we use one-hot; for `venue` (five
     levels) we use subset. We pass `split_rules` as a length-$p$ list,
-    one rule per column. The classification and survival notebooks reuse
-    this same typed-column idea with different feature sets.
+    one rule per column, so each feature gets the split rule that matches
+    its measurement scale.
     """)
     return
 
@@ -199,16 +185,7 @@ def _(RANDOM_SEED, f1_df, np, subsample):
     y_test = _y[test_idx]
 
     f"train: {X_train.shape[0]} laps ({subsample.value:.0%} of {_n_train}) | test: {X_test.shape[0]} laps | venues: {len(_venues)}"
-    return (
-        X_test,
-        X_train,
-        f1_feature_names,
-        n_num_f1,
-        test_idx,
-        train_idx,
-        y_test,
-        y_train,
-    )
+    return X_test, X_train, n_num_f1, test_idx, train_idx, y_test, y_train
 
 
 @app.cell(hide_code=True)
@@ -382,16 +359,15 @@ def _(az, ppc_f1):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Shared mechanics: posterior prediction with `pm.Data`
+    ### Prediction with new data
 
-    A few PyMC mechanics that appear repeatedly below and across the next
-    two notebooks:
+    A few PyMC mechanics make prediction easier:
 
     - **`pm.Data` and `pm.set_data`.** Wrapping $X$ in
-      `pm.Data("X_data", X)` makes the design matrix a *swappable* runtime
-      input. Before predicting at new inputs we call
-      `pm.set_data({"X_data": X_new})` and re-evaluate the model on the new
-      $X$ - no rebuild, the trained trees are reused.
+      `pm.Data("X_data", X)` makes the design matrix replaceable. Before
+      predicting at new inputs we call `pm.set_data({"X_data": X_new})` and
+      re-evaluate the model on the new $X$ — no rebuild, the trained trees
+      are reused.
 
     - **`sample_vars=["mu"]`.** Tells `pm.sample_posterior_predictive`
       which random variable to walk during prediction. `pmb.BART` requires
@@ -465,30 +441,6 @@ def _(np, plt, pp_f1, y_test):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Variable importance
-
-    `pmb.compute_variable_importance` ranks features by adding them one at
-    a time in order of **inclusion frequency** (how often each appears as a
-    splitting variable across the posterior trees) and measuring how the
-    restricted model's $R^2$ recovers the full-model fit. This is a
-    restricted-fit view of feature selection: the curve plateaus at the
-    smallest subset whose predictions still match the full BART ensemble.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(X_train, f1_feature_names, idata_f1, model_f1, mu_f1, pm, pmb):
-    with model_f1:
-        pm.set_data({"X_data": X_train})
-        _vi_f1 = pmb.compute_variable_importance(idata_f1, mu_f1, X_train)
-    pmb.plot_variable_importance(_vi_f1, labels=f1_feature_names)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
     ### Partial dependence
 
     `pmb.plot_pdp` shows a **marginal** effect: vary one covariate and
@@ -515,8 +467,8 @@ def _(mo):
 
     The PIT diagnostic above indicates poor calibration: the posterior
     predictive distribution is too wide and slightly biased relative to the
-    observed laps. A useful model-criticism workflow is to ask which failure
-    mode the diagnostic is pointing at before tuning blindly:
+    observed laps. Before tuning anything, ask what the diagnostic is telling
+    us:
 
     1. **Missing structure in `X`.** Add `driver`, `team`, and `position`.
        Driver-to-driver gaps are 0.3-0.8 s/lap, and team gaps are several
@@ -542,13 +494,12 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo):
-    run_f1_escalation = mo.ui.run_button(label="Run optional F1 escalation fit")
+    run_f1_escalation = mo.ui.run_button(label="Run F1 escalation")
     mo.md(
         """
-        **Optional / pre-run:** the next model adds `driver`, `team`, and
-        `position`, switches to linear leaves, deepens the ensemble
-        (`beta=1.5`, `m=200`), and uses a Student-T likelihood. Click the
-        button only when you want to run the escalated fit and its dependent
+        The next model adds `driver`, `team`, and `position`, switches to
+        linear leaves, deepens the ensemble (`beta=1.5`, `m=200`), and uses a
+        Student-T likelihood. Use the button to run that fit and its dependent
         diagnostics.
 
         {button}
@@ -613,7 +564,7 @@ def _(
 ):
     mo.stop(
         not run_f1_escalation.value,
-        mo.md("Click **Run optional F1 escalation fit** to run the Student-T model."),
+        mo.md("Click **Run F1 escalation** to run the Student-T model."),
     )
     _rules_t = (
         [pmb.ContinuousSplitRule] * n_numeric_full
@@ -776,9 +727,9 @@ def _(mo):
     mo.md(r"""
     ## Choosing the number of trees with PSIS-LOO-CV
 
-    **Optional / pre-run.** This section refits three additional BART models,
-    so it is gated for live teaching. Run it when you want a full-fidelity
-    model-selection demonstration rather than the fast live path.
+    This section refits three additional BART models to compare tree counts.
+    Because those fits take longer than the baseline, they sit behind a
+    button.
 
     `m` is BART's main knob: how many trees vote on the prediction. The
     Quiroga et al. paper recommends comparing fits at a few values of `m`
@@ -805,12 +756,11 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo):
-    run_m_sweep = mo.ui.run_button(label="Run optional PSIS-LOO refits")
+    run_m_sweep = mo.ui.run_button(label="Run tree-count comparison")
     mo.md(
         """
-        **Optional / pre-run:** the next cells fit three additional BART
-        ensembles. Click the button only when you want to run the tree-count
-        comparison.
+        The next cells fit three additional BART ensembles and compare them
+        with PSIS-LOO-CV.
 
         {button}
         """
@@ -837,21 +787,30 @@ def _(RANDOM_SEED, X_train, f1_split_rules, pm, pmb, y_train):
 
 @app.cell(hide_code=True)
 def _(fit_f1_m, mo, run_m_sweep):
-    mo.stop(not run_m_sweep.value, mo.md("Click **Run optional PSIS-LOO refits** to fit `m=10`."))
+    mo.stop(
+        not run_m_sweep.value,
+        mo.md("Click **Run tree-count comparison** to fit `m=10`."),
+    )
     idata_f1_m10 = fit_f1_m(10)
     return (idata_f1_m10,)
 
 
 @app.cell(hide_code=True)
 def _(fit_f1_m, mo, run_m_sweep):
-    mo.stop(not run_m_sweep.value, mo.md("Click **Run optional PSIS-LOO refits** to fit `m=50`."))
+    mo.stop(
+        not run_m_sweep.value,
+        mo.md("Click **Run tree-count comparison** to fit `m=50`."),
+    )
     idata_f1_m50 = fit_f1_m(50)
     return (idata_f1_m50,)
 
 
 @app.cell(hide_code=True)
 def _(fit_f1_m, mo, run_m_sweep):
-    mo.stop(not run_m_sweep.value, mo.md("Click **Run optional PSIS-LOO refits** to fit `m=200`."))
+    mo.stop(
+        not run_m_sweep.value,
+        mo.md("Click **Run tree-count comparison** to fit `m=200`."),
+    )
     idata_f1_m200 = fit_f1_m(200)
     return (idata_f1_m200,)
 
