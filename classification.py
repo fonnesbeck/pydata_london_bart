@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.5"
+__generated_with = "0.23.9"
 app = marimo.App(width="medium")
 
 
@@ -230,10 +230,6 @@ def _(RANDOM_SEED, gss_df, np, pmb, subsample):
             _relig_group(gss_df["relig"].to_numpy()),
         ]
     )
-    # Match each design-matrix column to the split rule BART should use:
-    # - ContinuousSplitRule: ordered numeric columns; split at thresholds x <= c.
-    # - OneHotSplitRule: binary indicators; split on off/on.
-    # - SubsetSplitRule: unordered categorical codes; split subsets of levels.
     split_rules = (
         [pmb.ContinuousSplitRule] * 8
         + [pmb.OneHotSplitRule] * 2
@@ -288,23 +284,16 @@ def _(mo):
 
     ### Split rules for the GSS columns
 
-    The GSS design matrix mixes ordered numbers, binary flags, and unordered
-    labels. BART needs a split rule that matches each column's semantics:
+    The GSS design matrix uses:
 
-    - **`ContinuousSplitRule`** is for ordered numeric columns. A tree tries
-      threshold splits such as `age <= 45` versus `age > 45`, so larger and
-      smaller values must be meaningful.
-    - **`OneHotSplitRule`** is for 0/1 indicators. The split is simply "off"
-      versus "on"; this is what we use for `sex` and `fulltime`.
-    - **`SubsetSplitRule`** is for unordered multi-level categoricals. A tree
-      can send any subset of levels left and the remaining levels right —
-      e.g. one set of religion groups versus the others — without pretending
-      the integer codes have a numeric order.
+    - **Continuous / ordinal:** `age`, `finrela`, `degree`, and the wellbeing
+      scales.
+    - **One-hot:** binary indicators `sex` and `fulltime`.
+    - **Subset:** unordered multi-level categoricals `race` and `relig`.
 
-    In this notebook that means 8 continuous/ordinal columns (`age`,
-    `finrela`, `degree`, and the wellbeing scales), 2 one-hot indicators
-    (`sex`, `fulltime`), and 2 subset-split categoricals (`race`, `relig`).
-    We pass `split_rules` in design-matrix order:
+    Treating `race` or `relig` as continuous would impose a fake ordering.
+    `SubsetSplitRule` lets BART split unordered levels directly. We pass
+    `split_rules` in design-matrix order:
     `[age, finrela, degree, anxiety, wrkmeangfl, stress, feelnerv, worry,
     sex, fulltime, race, relig]`.
     """)
@@ -761,30 +750,6 @@ def _(RANDOM_SEED, X_train, np, pm, pmb, split_rules, y_bin_train):
         idata_cls_sp = pm.sample(random_seed=RANDOM_SEED)
         pm.compute_log_likelihood(idata_cls_sp)
     return (idata_cls_sp,)
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    The uniform and domain-prior BART fits share the same binary outcome,
-    likelihood, training rows, and tree count, so PSIS-LOO isolates the effect
-    of the split prior. Higher `elpd_loo` is better; differences smaller than a
-    few standard errors are not practically meaningful.
-    """)
-    return
-
-
-@app.cell
-def _(az, idata_cls, idata_cls_sp):
-    cls_loo_comparison = az.compare(
-        {
-            "uniform split prior": idata_cls,
-            "wellbeing split prior": idata_cls_sp,
-        },
-        ic="loo",
-    )
-    cls_loo_comparison
-    return
 
 
 @app.cell
