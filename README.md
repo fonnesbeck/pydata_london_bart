@@ -22,13 +22,58 @@ introduction and two hands-on application notebooks:
 - **Wrap-up (5 min):** When to use BART vs. alternatives; resources for further learning
 
 
-## Running the notebooks
+## Environment Setup
+
+The tutorial uses [pixi](https://pixi.sh/) for dependency management and [marimo](https://marimo.io/) for interactive notebooks.
+
+Here are the steps to set up your environment:
+
+### 1. Install pixi
+
+Follow the [pixi installation instructions](https://pixi.sh/latest/) for your operating system:
+
+**macOS/Linux:**
+```bash
+curl -fsSL https://pixi.sh/install.sh | bash
+```
+
+**Windows:**
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm -Uri https://pixi.sh/install.ps1 | iex"
+```
+
+### 2. Clone the tutorial repository
 
 ```bash
-pixi install                                      # first-time setup
-pixi run marimo edit regression.py                 # author / teach in the browser
-pixi run marimo check pymc_intro.py regression.py classification.py  # structural validation
+git clone https://github.com/fonnesbeck/pydata_london_bart
+cd pydata_london_bart
 ```
+
+### 3. Install dependencies
+
+Pixi will automatically install all required packages (PyMC, pymc-bart, marimo, ArviZ, etc.):
+
+```bash
+pixi install
+```
+
+### 4. Launch the notebooks
+
+Open the marimo dashboard to browse and run the tutorial notebooks:
+
+```bash
+pixi run tutorial
+```
+
+This opens marimo's file browser in your web browser; from there, open `pymc_intro.py`, `regression.py`, or `classification.py`. You can also open a single notebook directly:
+
+```bash
+pixi run marimo edit regression.py
+```
+
+Notice that the `marimo` command is nested within a `pixi run` command; this ensures that the notebooks are run *inside the Python environment specified by pixi*.
+
+If everything installs and a notebook opens without errors, you're ready for the tutorial. If you run into problems with setup, please [open an issue](https://github.com/fonnesbeck/pydata_london_bart/issues) on this repository.
 
 ## Notebook writing conventions
 

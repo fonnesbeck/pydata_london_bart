@@ -26,6 +26,17 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo):
+    mo.image(
+        "images/silverstone_f2_corner.jpg",
+        alt="An open-wheel race car taking a corner at Silverstone",
+        width=700,
+        rounded=True,
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
     mo.md(r"""
     ### Runtime setup
 
