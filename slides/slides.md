@@ -105,59 +105,66 @@ align: rm-lm
 
 ::content::
 
-$$\Large P(\theta \mid D) = \frac{P(D \mid \theta)\,P(\theta)}{P(D)}$$
-
-<br>
-
-| Term | Name |
-|------|------|
-| $P(\theta)$ | **prior** — belief before data |
-| $P(D \mid \theta)$ | **likelihood** — fit to data |
-| $P(D)$ | **evidence** — marginal likelihood |
-| $P(\theta \mid D)$ | **posterior** — updated belief |
-
+$$\Large \underbrace{P(\theta \mid D)}_{\textcolor{#c44e52}{\text{posterior}}} = \frac{\overbrace{P(D \mid \theta)}^{\textcolor{#c44e52}{\text{likelihood}}} \cdot \overbrace{P(\theta)}^{\textcolor{#c44e52}{\text{prior}}}}{\underbrace{P(D)}_{\textcolor{#c44e52}{\text{evidence}}}}$$
 
 <!--
-- A parameter is a distribution, not a single value; prior, updated by likelihood, yields posterior.
+- A parameter is a distribution, not a single value: prior belief, updated by the likelihood, yields the posterior.
+- The evidence is the marginal likelihood — it returns shortly.
 - With more data the likelihood dominates; with less, the prior. In BART, the prior is exactly what keeps each tree a weak learner.
 -->
 
+
 ---
-layout: center
+layout: two-cols-title
+color: sky-light
 ---
 
-# A Gaussian example
+::title::
 
-Estimate a sensor's true mean $\mu$ from a prior $\mathcal{N}(\mu_0, \tau^2)$ and $n$ readings:
+# The Gaussian model
 
-$$\mu \mid y \sim \mathcal{N}\!\left( \frac{\tau^{-2}\mu_0 + \sigma^{-2} n\,\bar y}{\tau^{-2} + \sigma^{-2} n},\; \bigl(\tau^{-2} + \sigma^{-2} n\bigr)^{-1} \right)$$
+::left::
+
+## Priors
+
+Mean:
+
+$$\Large \mu \sim \mathcal{N}(\mu_0, \tau^2)$$
+
+Noise:
+
+$$\Large \sigma^2 \sim \text{Inv-}\chi^2(\nu, \lambda)$$
+
+::right::
+
+## Likelihood
+
+Given the mean and noise variance:
+
+$$\Large y_i \mid \mu, \sigma^2 \sim \mathcal{N}(\mu, \sigma^2)$$
 
 <br>
 
-Each source contributes a **precision** ($1/\text{variance}$); the posterior mean is
-their precision-weighted average — the algebra of weighted least squares.
+Bayes combines these into conditional updates for $\mu$ and $\sigma^2$.
 
 <!--
-- Every leaf in a BART tree is exactly this Gaussian–Gaussian update.
+- The model has two priors: one for the mean and one for the noise variance.
+- This mirrors BART later: leaf values have a Normal prior and sigma has an inverse-chi-square prior.
+- The likelihood says how readings would look given both unknowns.
 -->
-
 ---
 layout: center
 ---
 
-# The marginal likelihood
+# Conditional update for the mean
 
-$$\Huge P(D) = \int P(D \mid \theta)\,P(\theta)\,d\theta$$
+Given the current $\sigma^2$, Normal prior + Normal likelihood gives:
 
-<br>
-
-The denominator we cancel becomes the **score for a model structure** — how well
-a *tree shape* explains the data, with leaf values integrated out.
-
-BART uses it to compare candidate trees **without ever sampling their leaves**.
+$$\Large \mu \mid y \sim \mathcal{N}\!\left( \underbrace{\frac{\tau^{-2}\mu_0 + \sigma^{-2} n\,\bar y}{\tau^{-2} + \sigma^{-2} n}}_{\textcolor{#c44e52}{\text{precision-weighted average}}},\; \underbrace{\bigl(\tau^{-2} + \sigma^{-2} n\bigr)^{-1}}_{\textcolor{#c44e52}{\text{combined precision}}} \right)$$
 
 <!--
-- Holds the structural part of the sampler together; comes back in the MH ratio.
+- Each source contributes a precision (1/variance); the posterior mean is their precision-weighted average — the algebra of weighted least squares.
+- Every leaf in a BART tree is exactly this Gaussian–Gaussian update.
 -->
 
 ---
@@ -185,14 +192,10 @@ align: rm-lm
 
 Propose $\theta'$, accept with probability
 
-$$\alpha = \min\!\left(1,\; \frac{P(\theta' \mid D)}{P(\theta \mid D)} \cdot\; \frac{q(\theta \mid \theta')}{q(\theta' \mid \theta)} \right)$$
-
-<br>
-
-- The **likelihood ratio** is the marginal-likelihood score from the last section
-- The right factor corrects for asymmetric proposals ($=1$ when symmetric)
+$$\Large \alpha = \min\!\left(1,\; \underbrace{\frac{P(\theta' \mid D)}{P(\theta \mid D)}}_{\textcolor{#c44e52}{\text{posterior ratio}}} \cdot\; \underbrace{\frac{q(\theta \mid \theta')}{q(\theta' \mid \theta)}}_{\textcolor{#c44e52}{\text{proposal correction}}} \right)$$
 
 <!--
+- The posterior ratio uses the marginal-likelihood score from the last section; the proposal factor corrects for asymmetric moves (= 1 when symmetric).
 - When BART proposes a deeper tree, it scores the new structure's marginal likelihood vs the old.
 - Higher-scoring structures get accepted more often.
 -->
@@ -213,12 +216,48 @@ for t in range(n_draws):
 
 <img src="/images/mcmc_demo.png" class="mx-auto max-h-60 mt-3" />
 
-<div class="text-center text-sm opacity-70 mt-1">The histogram of draws recovers the Beta(3, 2) target. BART runs this same accept/reject loop over <b>tree structures</b> instead of a scalar <code>x</code>.</div>
-
 <!--
 - One accept/reject per iteration; the chain's histogram recovers the target.
 - This is the engine; BART runs it over tree structures instead of a scalar x.
 -->
+
+---
+layout: top-title-two-cols
+color: sky-light
+columns: is-6
+align: l-lt-lt
+---
+
+::title::
+
+# Partial residuals
+
+::left::
+
+## Hold the other trees fixed
+
+$$\Large
+\hat f_{-j}(X) = \sum_{k \ne j} f_k(X)
+$$
+
+Current prediction from every tree except $j$.
+
+::right::
+
+## Update tree $j$ on the leftover
+
+$$\Large
+r_j = y - \hat f_{-j}(X)
+$$
+
+This temporary target is what tree $j$ sees.
+
+<!--
+- This is the bookkeeping step that makes a sum of many trees practical.
+- Tree j does not try to fit y from scratch; it tries to fit the piece the other trees are not currently explaining.
+- One MH update per tree; one full sweep through the ensemble = one MCMC step.
+-->
+
 
 ---
 layout: section
@@ -271,25 +310,15 @@ graph TD
 -->
 
 ---
-layout: center
----
 
-# Stored as six parallel arrays
+# A tree predicts the leaf mean
 
-A leaf is any node with `split_var == -1`.
+<img src="/images/single_tree_step.png" class="mx-auto max-h-95" />
 
-```python
-class Tree:
-    split_var   # -1 if leaf, else the column to split on
-    split_val   # cut threshold
-    left, right # child indices (-1 for leaves)
-    parent      # parent index (-1 for root)
-    mu          # leaf value
-```
-
-Tedious to read, but **cheap to copy** — the sampler copies a tree on every move.
-
-<!-- The representation is deliberately flat so copy() is fast. -->
+<!--
+- Nonparametric: the fit is the mean of y inside each leaf — a step function, never a smooth curve.
+- Classic classification and regression trees (CART) picks each split greedily to minimise within-leaf variance; BART will instead SAMPLE tree structures — same building block, different fitting.
+-->
 
 ---
 layout: section
@@ -297,6 +326,17 @@ color: navy
 ---
 
 # Sum of trees
+
+---
+
+# Fit the next tree to the residuals
+
+<img src="/images/backfitting_residuals.png" class="mx-auto max-h-90" />
+
+<!--
+- One small tree can't track smooth structure without many splits; subtract its fit and hand the next tree the leftovers.
+- Repeat until the residuals are noise — this is backfitting, the additive idea boosting uses too; BART makes it Bayesian.
+-->
 
 ---
 
@@ -309,6 +349,31 @@ $$\Large f(x) = \sum_{j=1}^{m} g(x;\, T_j, M_j)$$
 <!--
 - Many SHALLOW trees, each fit to the residual after subtracting the others.
 - m=1 is one coarse step; by m=100–200 the staircase is fine enough to track the hump.
+-->
+
+---
+
+# Priors instead of cross-validation
+
+<div class="bart-essence">
+  <div class="bart-row">
+    <div class="bart-label">Tree shape</div>
+    <div class="bart-text">Boosting caps depth by CV — BART puts a <span class="bart-lead">prior on depth</span>.</div>
+  </div>
+  <div class="bart-row">
+    <div class="bart-label">Leaf values</div>
+    <div class="bart-text">Boosting tunes a learning rate — BART <span class="bart-lead">shrinks leaves</span> toward zero.</div>
+  </div>
+  <div class="bart-row">
+    <div class="bart-label">Noise</div>
+    <div class="bart-text">BART anchors σ² <span class="bart-lead">just below the OLS residual variance</span>.</div>
+  </div>
+</div>
+
+<!--
+- Boosting's regularisers are hard settings found by a CV grid; BART replaces each with a prior — no grid to run.
+- Soft constraints: when the data demand deeper trees, the posterior overrides the prior.
+- Roadmap: the next three sections deliver these one at a time.
 -->
 
 ---
@@ -331,7 +396,7 @@ Each split decision at depth $d$ is Bernoulli with $\;P(\text{split}) = \alpha\,
 <!--
 - Higher alpha: grows more eagerly at the root. Higher beta: punishes depth harder.
 - Default (alpha, beta) = (0.95, 2.0) concentrates mass on 2–4 leaf trees.
-- MH will still accept deeper trees when the data demand it — the prior just keeps pulling back.
+- First of the three priors. A soft constraint, unlike boosting's hard depth cap: MH still accepts deeper trees when the data demand it.
 -->
 
 ---
@@ -361,7 +426,7 @@ $$\mu_\ell \mid r \sim \mathcal{N}\!\left( \frac{n_\ell \sigma_\mu^2}{\sigma^2 +
 
 <!--
 - Normal prior on the leaf + Normal residuals = conjugate Normal posterior.
-- Posterior mean pulls each leaf's sample mean toward zero — hard for small leaves, gently for big ones.
+- Posterior mean pulls each leaf's sample mean toward zero — hard for small leaves, gently for big ones. Second prior; plays the role of boosting's learning rate.
 - The closed form also lets the MH move integrate mu out when scoring structures.
 -->
 
@@ -417,22 +482,26 @@ $$\small p(r \mid T, \sigma^2) = \prod_{\ell} \sqrt{\tfrac{\sigma^2}{\sigma^2 + 
 
 ::right::
 
-```mermaid {scale: 0.6}
-graph TD
-    subgraph Tp ["proposed T′"]
+```mermaid {scale: 0.5}
+graph LR
+    subgraph T ["current tree T"]
+        direction TB
+        A["x₀ ≤ c"] --> B["μ₁"]
+        A --> C["μ₂"]
+    end
+    subgraph Tp ["proposed tree T′ (grow μ₂)"]
         direction TB
         D["x₀ ≤ c"] --> E["μ₁"]
         D --> F["x₁ ≤ c′"]
         F --> G["μ₂ᴸ"]
         F --> H["μ₂ᴿ"]
     end
+    T -.->|propose grow| Tp
     classDef internal fill:#4c72b0,stroke:#333,color:#fff
     classDef leaf fill:#c44e52,stroke:#333,color:#fff
-    class D,F internal
-    class E,G,H leaf
+    class A,D,F internal
+    class B,C,E,G,H leaf
 ```
-
-<div class="text-center text-sm opacity-70">grow turns leaf μ₂ into a split</div>
 
 <!-- Never track mu during the structural move — that is the trick. -->
 
@@ -451,6 +520,7 @@ Accept $T'$ with probability $\min(1,\, e^{\log A})$. &nbsp; **Prune is the time
 <!--
 - Three pieces: how much better the data fits, how the prior feels about the new shape, and proposal bookkeeping.
 - grow_proposal / prune_proposal in the notebook compute each term.
+- In practice: MH grow/prune stalls on large trees — pymc-bart's default sampler is Particle Gibbs (conditional SMC, whole trees regrown in parallel); pmb.PGBART appears in the survival notebook.
 -->
 
 ---
@@ -479,6 +549,7 @@ The prior scale $\lambda$ is calibrated by OLS — set $P(\sigma < \hat\sigma) =
 
 <!--
 - Informative about scale, agnostic beyond that.
+- Third of the three priors: assumes BART explains at least what OLS does.
 - BART happily pulls sigma down as the trees explain more variance.
 -->
 
@@ -501,21 +572,31 @@ align: rm-lm
 
 ::title::
 
-# One sweep = a Gibbs cycle
+# Blocked Gibbs
+
+<div class="mt-4 text-2xl font-normal leading-snug opacity-75">
+one BART sweep
+</div>
 
 ::content::
 
-1. **Backfit** — partial residual $R_j = y - \sum_{i\ne j} g(x; T_i, M_i)$
-2. **Structure** — MH grow / prune on $T_j$ given $R_j$
-3. **Leaf** — conjugate draw of $M_j$
+1. **Backfit** — isolate tree $j$'s residual signal
+
+$$\large R_j = y - \sum_{i \ne j} g(x; T_i, M_i)$$
+
+2. **Structure** — MH grow/prune move for $T_j$
+3. **Leaf values** — conjugate draw of $M_j$
 4. **Noise** — inverse-$\chi^2$ draw of $\sigma^2$
 
 <br>
 
-Each block has its own update; one sweep touches every parameter once.
-That pattern is **Gibbs sampling**.
+A sweep is **Gibbs sampling** over these four blocks.
 
-<!-- This is run_bart. -->
+<!--
+- The key point is blocking: BART does not update the entire forest in one giant move.
+- A sweep visits each conditional update in turn: residual bookkeeping, tree structure, leaf values, then noise.
+- That is the Gibbs pattern: condition on the current value of everything else, update one block, then move on.
+-->
 
 ---
 
@@ -531,7 +612,7 @@ That pattern is **Gibbs sampling**.
 
 ---
 
-# `run_bart`, the loop
+# The sampler loop
 
 ```python
 for it in range(n_iter):
@@ -546,35 +627,26 @@ for it in range(n_iter):
     sigma2 = draw_sigma2(y - tree_preds.sum(0), nu, lam, rng)  # noise
 ```
 
-Every tree starts empty; the calibrated leaf prior keeps each tree's
-contribution small, so no single tree dominates from the first sweep.
-
-<!-- The whole algorithm is this nested loop plus the proposals we built. -->
+<!--
+- The whole algorithm is this nested loop plus the proposals we built.
+- Every tree starts empty; the calibrated leaf prior keeps each tree's contribution small, so no single tree dominates from the first sweep.
+- Remaining knobs: k (leaf shrinkage — ±k prior SDs cover the range of y), nu/q (calibrate the σ² prior against an OLS estimate), thin (subsample saved draws).
+-->
 <!-- Init: trees are empty stumps; the sigma_mu = 0.5/(k*sqrt(m)) prior shrinks each leaf draw, so the first prediction is a small fraction of ybar, not ybar itself (ISLP's f^1 = ybar is a one-tree simplification). -->
 
----
-layout: center
 ---
 
 # What BART delivers
 
-The sampler returns $B$ sums-of-trees, one per sweep: $f^{(1)}, \dots, f^{(B)}$.
+$$\Large \hat f(x) = \frac{1}{B-L}\sum_{b=L+1}^{B} \underbrace{f^{(b)}(x)}_{\textcolor{#c44e52}{\text{one draw per sweep}}}$$
 
-<br>
-
-Drop the first $L$ (**burn-in**) and **average the rest** — that average is the posterior mean:
-
-$$\hat f(x) = \frac{1}{B-L}\sum_{b=L+1}^{B} f^{(b)}(x)$$
-
-<br>
-
-**Percentiles** of the kept draws give the **credible band** — the blue shading in the hero figure.
-A point estimate *and* its uncertainty, from one fit.
+<img src="/images/posterior_draws.png" class="mx-auto max-h-78 mt-2" />
 
 <!--
-- The payoff of the Bayesian sampler: not one curve but a posterior over curves.
-- L is the burn-in we discard; the rest are the posterior draws of f.
-- Mean for the prediction, spread for the band — BART speaks in credible intervals.
+- Not one curve but a posterior over curves: each thin line is one sweep's sum-of-trees.
+- Drop the first L sweeps as burn-in, average the rest — that's the posterior mean.
+- Percentiles of the same draws give the credible band: a point estimate AND its uncertainty, from one fit.
+- The why-Bayesian payoff in one breath: no CV grid, priors the data can override, and coherent uncertainty for free.
 -->
 
 
@@ -601,31 +673,13 @@ color: navy
 
 <img src="/images/overfitting.png" class="mx-auto max-h-80" />
 
-<div class="text-center text-sm opacity-70 mt-1">Gradient boosting drives its <b>training</b> error toward zero while its <b>test</b> error turns back up — the widening gap is overfitting. BART's train and test error settle together and stay flat.</div>
-
 <!--
 - The classic train/test overfitting picture: boosting's test error turns up as the train error keeps falling — the gap IS overfitting.
 - BART's train and test stay close and flat: the posterior average over draws cannot memorise the way a longer boosting run does.
+- Boosting finds its stopping point by heavy CV; BART's priors make that search unnecessary.
 - All four curves are MSE vs the OBSERVED (noisy) targets — the standard learning-curve reference, the only one on which "training error falls to zero" is meaningful.
 - Noisier Friedman than the rest of the deck (noise 5 vs 1) + shallow boosting trees: overfitting is invisible on clean data, so this regime is chosen to make the contrast land. The ISLP Heart-data demo, on our own DGP.
 -->
-
----
-layout: center
----
-
-# A note on Particle Gibbs
-
-MH grow/prune mixes well on small trees but **stalls on large ones**.
-
-**Conditional SMC** grows several whole trees in parallel with resampling,
-fixing one particle to the current tree.
-
-<br>
-
-This is the sampler `pymc-bart` uses by default — exposed in `03_survival.py` as `pmb.PGBART(...)`.
-
-<!-- We don't build PG from scratch; the weight bookkeeping distracts from the core ideas. -->
 
 ---
 layout: section

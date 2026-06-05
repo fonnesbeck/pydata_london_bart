@@ -156,6 +156,69 @@ def fig_bart_hero(ns):
     save(fig, "bart_hero.png")
 
 
+def fig_posterior_draws(ns):
+    """What the sampler hands back: individual posterior draws of f, their
+    average (the posterior mean), and the percentile band.
+
+    The buildup fits only store one grid draw each, so this runs a small fresh
+    fit and reconstructs every kept draw's curve from its tree snapshots, with
+    the same inverse scaling as `anim_sum_of_trees_buildup`.
+    """
+    b = ns["buildup"]
+    run_bart = ns["run_bart"]
+    predict = ns["predict"]
+    x_train, y_train = b["x_train"], b["y_train"]
+    x_grid = b["x_grid"]
+
+    print("  fitting BART for posterior-draws figure ...", flush=True)
+    fit = run_bart(
+        x_train[:, None],
+        y_train,
+        m=50,
+        n_iter=600,
+        burn_in=300,
+        thin=15,
+        rng=np.random.default_rng(20260423),
+    )
+    y_min, y_range = fit["y_min"], fit["y_range"]
+    offset = y_min + 0.5 * y_range
+    draws = np.array(
+        [
+            sum(predict(t, x_grid[:, None]) for t in trees) * y_range + offset
+            for trees in fit["tree_snapshots"]
+        ]
+    )
+
+    fig, ax = plt.subplots(figsize=(7.4, 4.2))
+    ax.scatter(
+        x_train, y_train, s=16, alpha=0.45, color="#4c4c4c", label="observations"
+    )
+    for i, d in enumerate(draws):
+        ax.plot(
+            x_grid,
+            d,
+            color="#4c72b0",
+            alpha=0.28,
+            lw=0.9,
+            drawstyle="steps-mid",
+            label=r"posterior draws $f^{(b)}$" if i == 0 else None,
+        )
+    ax.plot(x_grid, draws.mean(axis=0), color="#4c72b0", lw=2.6, label="posterior mean")
+    ax.fill_between(
+        x_grid,
+        np.percentile(draws, 5, axis=0),
+        np.percentile(draws, 95, axis=0),
+        color="#4c72b0",
+        alpha=0.15,
+        label="90% credible band",
+    )
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.legend(frameon=False, loc="upper left")
+    fig.tight_layout()
+    save(fig, "posterior_draws.png")
+
+
 def fig_mcmc_demo(ns):
     draws, accept = ns["demo_rw_metropolis"](
         ns["demo_log_beta"], x0=0.5, step=0.3, n_draws=4000, rng=20260518
@@ -183,6 +246,24 @@ def fig_mcmc_demo(ns):
     axes[1].legend(frameon=False)
     fig.tight_layout()
     save(fig, "mcmc_demo.png")
+
+
+def fig_convergence_demo(ns):
+    """Four RW-Metropolis chains on the Beta(3, 2) target from dispersed
+    starts, overlaid: after a short transient they mix into one band."""
+    rw = ns["demo_rw_metropolis"]
+    log_beta = ns["demo_log_beta"]
+    starts = [0.02, 0.3, 0.6, 0.98]
+    colors = ["#4c72b0", "#dd8452", "#55a868", "#c44e52"]
+    fig, ax = plt.subplots(figsize=(7.4, 4.2))
+    for i, (x0, c) in enumerate(zip(starts, colors)):
+        draws, _ = rw(log_beta, x0=x0, step=0.3, n_draws=600, rng=20260518 + i)
+        ax.plot(draws, lw=0.8, alpha=0.85, color=c, label=f"chain from x₀ = {x0}")
+    ax.set_xlabel("iteration")
+    ax.set_ylabel("x")
+    ax.legend(frameon=False, loc="lower right", ncol=2)
+    fig.tight_layout()
+    save(fig, "convergence_demo.png")
 
 
 def fig_single_tree(ns):
@@ -230,6 +311,35 @@ def fig_single_tree(ns):
     save(fig, "single_tree.png")
 
 
+def fig_single_tree_step(ns):
+    """One tree's fit to the 1D toy data: flat segments at the leaf means."""
+    b = ns["buildup"]
+    fit = b["fits"][1]
+    fig, ax = plt.subplots(figsize=(7.0, 4.0))
+    ax.scatter(
+        b["x_train"],
+        b["y_train"],
+        s=14,
+        alpha=0.55,
+        color="#4c4c4c",
+        label="observations",
+    )
+    ax.plot(b["x_grid"], b["f_true"], color="#c44e52", lw=1.4, label=r"true $f(x)$")
+    ax.plot(
+        b["x_grid"],
+        fit["f_draw"],
+        color="#4c72b0",
+        lw=2.2,
+        drawstyle="steps-mid",
+        label="single-tree fit",
+    )
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.legend(frameon=False, loc="upper left")
+    fig.tight_layout()
+    save(fig, "single_tree_step.png")
+
+
 def fig_sum_of_trees_panels(ns):
     b = ns["buildup"]
     ms = b["ms"]
@@ -251,6 +361,71 @@ def fig_sum_of_trees_panels(ns):
     )
     fig.tight_layout()
     save(fig, "sum_of_trees_panels.png")
+
+
+def fig_backfitting_residuals(ns):
+    """Three-panel backfitting buildup: tree 1's fit, tree 2 fit to the
+    residuals, and their sum.
+
+    Runs a fresh tiny fit (m=3) with the from-scratch sampler so each tree
+    carries a visible share of the signal, then unpacks one kept draw's trees
+    the same way `anim_sum_of_trees_buildup` does. `predict` returns SCALED
+    values: the running total gets the full inverse transform, while a single
+    tree's contribution (and the residuals it is fit to) only scale by
+    `y_range` — the offset belongs to the total, not to any one tree.
+    """
+    b = ns["buildup"]
+    run_bart = ns["run_bart"]
+    predict = ns["predict"]
+    x_train, y_train = b["x_train"], b["y_train"]
+    x_grid, f_true = b["x_grid"], b["f_true"]
+
+    print("  fitting tiny m=3 BART for backfitting figure ...", flush=True)
+    fit = run_bart(
+        x_train[:, None],
+        y_train,
+        m=3,
+        n_iter=400,
+        burn_in=200,
+        thin=10,
+        rng=np.random.default_rng(20260423),
+    )
+
+    # Posterior draw closest (L2) to the posterior mean, as in the buildup gif.
+    fd = fit["f_draws_scaled"]
+    d = int(np.argmin(((fd - fd.mean(axis=0)) ** 2).sum(axis=1)))
+    trees = fit["tree_snapshots"][d]
+    y_min, y_range = fit["y_min"], fit["y_range"]
+    offset = y_min + 0.5 * y_range
+
+    grid_preds = np.array([predict(t, x_grid[:, None]) for t in trees])
+    train_preds = np.array([predict(t, x_train[:, None]) for t in trees])
+    cum_grid = np.cumsum(grid_preds, axis=0) * y_range + offset
+    cum_train = np.cumsum(train_preds, axis=0) * y_range + offset
+    resid1 = y_train - cum_train[0]
+    tree2_grid = grid_preds[1] * y_range
+
+    fig, axes = plt.subplots(1, 3, figsize=(10.8, 3.5))
+    for ax in (axes[0], axes[2]):
+        ax.scatter(x_train, y_train, s=10, alpha=0.5, color="#4c4c4c")
+        ax.plot(x_grid, f_true, color="#c44e52", lw=1.1)
+        ax.set_xlabel("x")
+    axes[0].plot(x_grid, cum_grid[0], color="#4c72b0", lw=2.0, drawstyle="steps-mid")
+    axes[0].set_title("tree 1 fit to the data")
+    axes[0].set_ylabel("y")
+
+    axes[1].axhline(0.0, color="#c44e52", lw=1.1)
+    axes[1].scatter(x_train, resid1, s=10, alpha=0.5, color="#4c4c4c")
+    axes[1].plot(x_grid, tree2_grid, color="#4c72b0", lw=2.0, drawstyle="steps-mid")
+    axes[1].set_title("tree 2 fit to the residuals")
+    axes[1].set_xlabel("x")
+    axes[1].set_ylabel(r"$y - $ tree 1")
+
+    axes[2].plot(x_grid, cum_grid[1], color="#4c72b0", lw=2.0, drawstyle="steps-mid")
+    axes[2].set_title("tree 1 + tree 2")
+
+    fig.tight_layout()
+    save(fig, "backfitting_residuals.png")
 
 
 def anim_sum_of_trees_buildup(ns):
@@ -1000,9 +1175,13 @@ def main():
     print("Rendering figures ...", flush=True)
     fig_gbm_demo(ns)
     fig_bart_hero(ns)
+    fig_posterior_draws(ns)
     fig_mcmc_demo(ns)
+    fig_convergence_demo(ns)
     fig_single_tree(ns)
+    fig_single_tree_step(ns)
     fig_sum_of_trees_panels(ns)
+    fig_backfitting_residuals(ns)
     if "--no-animations" not in sys.argv:
         anim_sum_of_trees_buildup(ns)
     fig_prior_tree_sizes(ns)
