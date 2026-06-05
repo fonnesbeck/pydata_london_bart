@@ -31,7 +31,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     import multiprocessing as mp
 
@@ -329,7 +329,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(az, idata_cls):
     az.plot_convergence_dist(idata_cls, var_names=["eta"])
     return
@@ -555,7 +555,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(X_train, eta, feature_names, idata_cls, model_cls, pm, pmb):
     with model_cls:
         pm.set_data({"X_data": X_train})
@@ -566,19 +566,12 @@ def _(X_train, eta, feature_names, idata_cls, model_cls, pm, pmb):
 
 @app.cell(hide_code=True)
 def _(mo):
-    run_classification_extensions = mo.ui.run_button(
-        label="Run classification extensions"
-    )
-    mo.md(
-        """
-        The remaining sections compute backward variable importance, compare a
-        domain-informed split prior, and fit the ordered-probit model on the
-        full satisfaction scale.
-
-        {button}
-        """
-    ).batch(button=run_classification_extensions)
-    return (run_classification_extensions,)
+    mo.md(r"""
+    The remaining sections compute backward variable importance, compare a
+    domain-informed split prior, and fit the ordered-probit model on the
+    full satisfaction scale.
+    """)
+    return
 
 
 @app.cell(hide_code=True)
@@ -605,24 +598,8 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
-def _(
-    X_train,
-    eta,
-    feature_names,
-    idata_cls,
-    mo,
-    model_cls,
-    np,
-    pm,
-    pmb,
-    run_classification_extensions,
-):
-    mo.stop(
-        not run_classification_extensions.value,
-        mo.md("Click **Run classification extensions** to compute backward VI."),
-    )
-
+@app.cell
+def _(X_train, eta, feature_names, idata_cls, model_cls, np, pm, pmb):
     class _LabeledMatrix:
         def __init__(self, values, columns):
             self._values = values
@@ -643,9 +620,11 @@ def _(
     return (vi_backward,)
 
 
-@app.cell(hide_code=True)
-def _(pmb, vi_backward):
-    pmb.plot_scatter_submodels(vi_backward, grid=(3, 4), figsize=(12, 10))
+@app.cell
+def _(plt, pmb, vi_backward):
+    _fig = pmb.plot_scatter_submodels(vi_backward, grid=(3, 4), figsize=(12, 10))
+    plt.tight_layout()
+    _fig
     return
 
 
@@ -676,21 +655,7 @@ def _(mo):
 
 
 @app.cell
-def _(
-    RANDOM_SEED,
-    X_train,
-    mo,
-    np,
-    pm,
-    pmb,
-    run_classification_extensions,
-    split_rules,
-    y_bin_train,
-):
-    mo.stop(
-        not run_classification_extensions.value,
-        mo.md("Click **Run classification extensions** to fit the split-prior model."),
-    )
+def _(RANDOM_SEED, X_train, np, pm, pmb, split_rules, y_bin_train):
     _split_prior = np.ones(12)
     _split_prior[3:8] = 10.0
     with pm.Model() as model_cls_sp:
@@ -709,7 +674,7 @@ def _(
     return (idata_cls_sp,)
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(X_train, feature_names, idata_cls, idata_cls_sp, plt, pmb):
     _fig, (_ax0, _ax1) = plt.subplots(1, 2, figsize=(13, 4.0), sharey=True)
     pmb.plot_variable_inclusion(idata_cls, X_train, labels=feature_names, ax=_ax0)
@@ -730,11 +695,10 @@ def _(mo):
     mo.md(r"""
     ## From yes/no to the full scale
 
-    Collapsing satisfaction to "highly satisfied or not" threw away real
+    Collapsing satisfaction to a binary variable threw away a lot of
     information: it treats someone who rates their life a 5 the same as an 8,
-    and a 9 the same as a 10. If we care about *where* people fall, not just
-    whether they clear a bar, we should model the whole ladder. That is an
-    **ordered probit**: the same BART score $\eta$, now sliced by a set of
+    and a 9 the same as a 10. To model an ordinal range as an outcome, we employ a
+    **ordered probit** model: the same BART score $\eta$, now sliced by a set of
     estimated cutpoints into ordered categories.
 
     We model `lifenow` as **$K = 7$** ordered categories
@@ -743,7 +707,7 @@ def _(mo):
     records which interval the score fell into. Ordered cutpoints are the
     thresholds between those intervals.
 
-    One cutpoint is fixed at $0$ for identifiability: if we shifted every
+    One cutpoint is arbitrarily fixed at $0$ (a **baseline**) for identifiability: if we shifted every
     $\eta$ and every cutpoint by the same amount, the category probabilities
     would not change. The remaining $K - 2 = 5$ cutpoints are constrained
     increasing via `pm.distributions.transforms.ordered` (with an `initval`
@@ -762,22 +726,7 @@ def _(mo):
 
 
 @app.cell
-def _(
-    K_ord,
-    RANDOM_SEED,
-    X_train,
-    mo,
-    np,
-    pm,
-    pmb,
-    run_classification_extensions,
-    split_rules,
-    y_ord_train,
-):
-    mo.stop(
-        not run_classification_extensions.value,
-        mo.md("Click **Run classification extensions** to fit the ordered probit."),
-    )
+def _(K_ord, RANDOM_SEED, X_train, np, pm, pmb, split_rules, y_ord_train):
     with pm.Model() as model_ord:
         eta_ord = pmb.BART(
             "eta",
@@ -810,7 +759,7 @@ def _(az, idata_ord):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(az, idata_ord):
     az.plot_convergence_dist(idata_ord, var_names=["eta"])
     return
@@ -896,7 +845,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(X_train, eta_ord, feature_names, pl, pmb):
     _X_df = pl.DataFrame(X_train, schema=feature_names)
     _pdp_features = [0, 1, 2, 3, 4]
@@ -943,18 +892,14 @@ def _(mo):
 
     Across the binary model and the ordinal model, the same story emerges from
     the variable-importance and partial-dependence views:
-    the self-reported wellbeing scales — stress, worry, anxiety, how
-    meaningful work feels — move predicted satisfaction far more than
-    demographics like age or education. The binary model answers a sharp
-    question ("who clears the bar?") with calibration, ranking, and a
-    logistic-regression baseline we can check on held-out data; the ordered
-    probit recovers the gradation in between, at the cost of a much heavier
-    fit. Same BART score underneath — only the likelihood changed.
+    the self-reported wellbeing scales, which include stress, worry, anxiety, how
+    meaningful work feels, move predicted satisfaction far more than
+    demographics like age or education.
     """)
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     import marimo as mo
 

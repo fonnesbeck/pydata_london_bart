@@ -14,10 +14,8 @@ def _(mo):
     to a real-world regression: **predicting lap times across five 2024
     Formula 1 Grands Prix** (Bahrain, Monaco, Spain, Britain, Monza).
 
-    The five races span the lap-time range of the calendar (Monaco's
-    ~75s street laps to Monza's ~85s low-downforce blasts; Britain and
-    Spain in the middle) and include dry, hot, and wet phases. An 80/20
-    random split holds out roughly 1000 laps for testing.
+    The five races span the lap-time range of the calendar and include dry, hot, and wet phases. An 80/20
+    random split holds out roughly 1000 laps for testing (when using the full dataset).
 
     We start with a baseline BART fit, check its predictive calibration on
     held-out laps, and then use those checks to motivate a richer F1 model
@@ -40,7 +38,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     import multiprocessing as mp
 
@@ -68,17 +66,17 @@ def _(mo):
     in/out, deleted laps, safety-car phases). Each row is one clean
     racing lap.
 
-    Predictors: in-race progress (tyre life, lap number, stint),
+    Predictors: in-race progress (tire life, lap number, stint),
     running position, weather (air/track temperature, humidity, wind),
-    tyre compound, and the `venue` categorical naming the race.
+    tire compound, and the `venue` categorical naming the race.
     """)
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(pl):
     f1_df = pl.read_csv("data/f1_laps.csv")
-    f1_df.shape
+    f1_df.head()
     return (f1_df,)
 
 
@@ -127,7 +125,7 @@ def _(mo):
       subset $S \subset \{0, \ldots, K-1\}$ in a single node. Cheaper
       and more expressive when $K$ is small.
 
-    For tyre compound (four levels) we use one-hot; for `venue` (five
+    For tire compound (four levels) we use one-hot; for `venue` (five
     levels) we use subset. We pass `split_rules` as a length-$p$ list,
     one rule per column, so each feature gets the split rule that matches
     its measurement scale.
@@ -145,7 +143,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(RANDOM_SEED, f1_df, np, subsample):
     _num_cols = [
         "tyre_life",
@@ -284,7 +282,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(az, idata_f1):
     az.plot_convergence_dist(idata_f1, var_names=["mu"])
     return
@@ -327,7 +325,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(az, ppc_f1):
     az.plot_ppc_dist(ppc_f1, kind="ecdf", num_samples=100)
     return
@@ -350,7 +348,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(az, ppc_f1):
     az.plot_ppc_pit(ppc_f1)
     return
@@ -452,11 +450,18 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
-def _(X_train, model_f1, mu_f1, pm, pmb, y_train):
+@app.cell
+def _(X_train, model_f1, pm):
     with model_f1:
         pm.set_data({"X_data": X_train})
-        pmb.plot_pdp(bartrv=mu_f1, X=X_train, Y=y_train)
+    return
+
+
+@app.cell
+def _(X_train, mu_f1, plt, pmb, y_train):
+    _fig = pmb.plot_pdp(bartrv=mu_f1, X=X_train, Y=y_train, figsize=(5,12))
+    plt.tight_layout()
+    _fig
     return
 
 
@@ -494,18 +499,12 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo):
-    run_f1_escalation = mo.ui.run_button(label="Run F1 escalation")
-    mo.md(
-        """
-        The next model adds `driver`, `team`, and `position`, switches to
-        linear leaves, deepens the ensemble (`beta=1.5`, `m=200`), and uses a
-        Student-T likelihood. Use the button to run that fit and its dependent
-        diagnostics.
-
-        {button}
-        """
-    ).batch(button=run_f1_escalation)
-    return (run_f1_escalation,)
+    mo.md(r"""
+    The next model adds `driver`, `team`, and `position`, switches to
+    linear leaves, deepens the ensemble (`beta=1.5`, `m=200`), and uses a
+    Student-T likelihood.
+    """)
+    return
 
 
 @app.cell(hide_code=True)
@@ -519,7 +518,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(f1_df, np, pl, test_idx, train_idx):
     num_cols_full = [
         "tyre_life",
@@ -552,20 +551,7 @@ def _(f1_df, np, pl, test_idx, train_idx):
 
 
 @app.cell
-def _(
-    RANDOM_SEED,
-    X_train_full,
-    mo,
-    n_numeric_full,
-    pm,
-    pmb,
-    run_f1_escalation,
-    y_train_full,
-):
-    mo.stop(
-        not run_f1_escalation.value,
-        mo.md("Click **Run F1 escalation** to run the Student-T model."),
-    )
+def _(RANDOM_SEED, X_train_full, n_numeric_full, pm, pmb, y_train_full):
     _rules_t = (
         [pmb.ContinuousSplitRule] * n_numeric_full
         + [pmb.OneHotSplitRule] * 3
@@ -607,7 +593,7 @@ def _(mo):
 
 
 @app.cell
-def _(RANDOM_SEED, idata_f1_t, model_f1_t, pm, y_train_full):
+def _(RANDOM_SEED, idata_f1_t, model_f1_t, pm):
     with model_f1_t:
         ppc_f1_t = pm.sample_posterior_predictive(
             idata_f1_t,
@@ -616,11 +602,10 @@ def _(RANDOM_SEED, idata_f1_t, model_f1_t, pm, y_train_full):
             random_seed=RANDOM_SEED,
             extend_inferencedata=True,
         )
-    _ = y_train_full
     return (ppc_f1_t,)
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(az, ppc_f1_t):
     az.plot_ppc_pit(ppc_f1_t)
     return
@@ -650,7 +635,7 @@ def _(RANDOM_SEED, X_test_full, idata_f1_t, model_f1_t, pm):
     return (pp_f1_t,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(np, plt, pp_f1_t, y_test_full):
     _mu_pred = pp_f1_t.predictions["mu"].stack(sample=("chain", "draw")).values
     _f_mean = _mu_pred.mean(axis=1)
@@ -682,7 +667,7 @@ def _(np, plt, pp_f1_t, y_test_full):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(az, idata_f1, idata_f1_t, pl):
     def _row(name, idata, with_nu=False):
         _sig = float(idata["posterior"]["sigma"].mean().item())
@@ -728,8 +713,6 @@ def _(mo):
     ## Choosing the number of trees with PSIS-LOO-CV
 
     This section refits three additional BART models to compare tree counts.
-    Because those fits take longer than the baseline, they sit behind a
-    button.
 
     `m` is BART's main knob: how many trees vote on the prediction. The
     Quiroga et al. paper recommends comparing fits at a few values of `m`
@@ -754,21 +737,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    run_m_sweep = mo.ui.run_button(label="Run tree-count comparison")
-    mo.md(
-        """
-        The next cells fit three additional BART ensembles and compare them
-        with PSIS-LOO-CV.
-
-        {button}
-        """
-    ).batch(button=run_m_sweep)
-    return (run_m_sweep,)
-
-
-@app.cell(hide_code=True)
+@app.cell
 def _(RANDOM_SEED, X_train, f1_split_rules, pm, pmb, y_train):
     def fit_f1_m(m):
         with pm.Model():
@@ -786,36 +755,24 @@ def _(RANDOM_SEED, X_train, f1_split_rules, pm, pmb, y_train):
 
 
 @app.cell(hide_code=True)
-def _(fit_f1_m, mo, run_m_sweep):
-    mo.stop(
-        not run_m_sweep.value,
-        mo.md("Click **Run tree-count comparison** to fit `m=10`."),
-    )
+def _(fit_f1_m):
     idata_f1_m10 = fit_f1_m(10)
     return (idata_f1_m10,)
 
 
 @app.cell(hide_code=True)
-def _(fit_f1_m, mo, run_m_sweep):
-    mo.stop(
-        not run_m_sweep.value,
-        mo.md("Click **Run tree-count comparison** to fit `m=50`."),
-    )
+def _(fit_f1_m):
     idata_f1_m50 = fit_f1_m(50)
     return (idata_f1_m50,)
 
 
 @app.cell(hide_code=True)
-def _(fit_f1_m, mo, run_m_sweep):
-    mo.stop(
-        not run_m_sweep.value,
-        mo.md("Click **Run tree-count comparison** to fit `m=200`."),
-    )
+def _(fit_f1_m):
     idata_f1_m200 = fit_f1_m(200)
     return (idata_f1_m200,)
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(az, idata_f1_m10, idata_f1_m200, idata_f1_m50, plt):
     cmp_m = az.compare(
         {
@@ -877,7 +834,7 @@ def _(idata_f1_m10, idata_f1_m200, idata_f1_m50, plt):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     import marimo as mo
 

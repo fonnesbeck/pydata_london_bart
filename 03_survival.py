@@ -45,7 +45,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     import multiprocessing as mp
 
@@ -121,7 +121,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(pl):
     HORIZON = 36.0
     tj_all = (
@@ -167,7 +167,7 @@ def _(mo, tj_all):
     return (subsample,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(HORIZON, RANDOM_SEED, subsample, tj_all):
     tj_df = tj_all.sample(n=int(subsample.value), seed=RANDOM_SEED, shuffle=True)
     f"{tj_df.height} subjects, {int(tj_df['event'].sum())} returns, {tj_df.height - int(tj_df['event'].sum())} censored at {HORIZON:.0f}-month horizon"
@@ -378,7 +378,7 @@ def _(RANDOM_SEED, pm, q_idx, surv_X_glm, surv_y):
     return idata_glm, model_glm
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(az, idata_glm):
     _summary_glm = az.summary(
         idata_glm,
@@ -454,7 +454,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(az, idata_surv):
     az.plot_convergence_dist(idata_surv, var_names=["eta"])
     return
@@ -730,21 +730,6 @@ def _(S_curves, S_glm_curves, S_km, np, plt, times):
 
 @app.cell(hide_code=True)
 def _(mo):
-    run_survival_extensions = mo.ui.run_button(label="Run survival computations")
-    mo.md(
-        """
-        The button below starts the longer-running survival computations:
-        the hazard panels, the posterior-predictive Kaplan-Meier check,
-        variable importance, PDP, and ICE.
-
-        {button}
-        """
-    ).batch(button=run_survival_extensions)
-    return (run_survival_extensions,)
-
-
-@app.cell(hide_code=True)
-def _(mo):
     mo.md(r"""
     ### Hazards behind the survival curves
 
@@ -765,12 +750,7 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(h_curves, h_glm_curves, mo, np, plt, run_survival_extensions, times):
-    mo.stop(
-        not run_survival_extensions.value,
-        mo.md("Click **Run survival computations** to draw the hazard panel."),
-    )
-
+def _(h_curves, h_glm_curves, np, plt, times):
     def _band_h(curves):
         return curves.mean(axis=0), np.quantile(curves, [0.05, 0.95], axis=0)
 
@@ -944,19 +924,7 @@ def _(mo):
 
 
 @app.cell
-def _(
-    RANDOM_SEED,
-    idata_surv,
-    mo,
-    model_surv,
-    pm,
-    run_survival_extensions,
-    surv_X,
-):
-    mo.stop(
-        not run_survival_extensions.value,
-        mo.md("Click **Run survival computations** to run the KM PPC."),
-    )
+def _(RANDOM_SEED, idata_surv, model_surv, pm, surv_X):
     with model_surv:
         pm.set_data({"X_data": surv_X})
         pp_train = pm.sample_posterior_predictive(
@@ -1093,26 +1061,8 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
-def _(
-    RANDOM_SEED,
-    eta,
-    feature_names,
-    idata_surv,
-    mo,
-    model_surv,
-    plt,
-    pm,
-    pmb,
-    run_survival_extensions,
-    surv_X,
-):
-    mo.stop(
-        not run_survival_extensions.value,
-        mo.md(
-            "Click **Run survival computations** to compute survival variable importance."
-        ),
-    )
+@app.cell
+def _(RANDOM_SEED, eta, feature_names, idata_surv, model_surv, plt, pm, pmb, surv_X):
     with model_surv:
         pm.set_data({"X_data": surv_X})
         _vi_fwd = pmb.compute_variable_importance(
@@ -1143,12 +1093,8 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
-def _(eta, mo, model_surv, pm, pmb, run_survival_extensions, surv_X, surv_y):
-    mo.stop(
-        not run_survival_extensions.value,
-        mo.md("Click **Run survival computations** to draw survival PDPs."),
-    )
+@app.cell
+def _(eta, model_surv, pm, pmb, surv_X, surv_y):
     with model_surv:
         pm.set_data({"X_data": surv_X})
         pmb.plot_pdp(
@@ -1189,22 +1135,16 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(
     RANDOM_SEED,
     eta,
-    mo,
     model_surv,
     pm,
     pmb,
-    run_survival_extensions,
     surv_X,
     surv_y,
 ):
-    mo.stop(
-        not run_survival_extensions.value,
-        mo.md("Click **Run survival computations** to draw ICE curves."),
-    )
     with model_surv:
         pm.set_data({"X_data": surv_X})
         pmb.plot_ice(
@@ -1243,7 +1183,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     import marimo as mo
 

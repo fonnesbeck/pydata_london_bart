@@ -20,7 +20,7 @@ fonts:
 <!--
 - Session 1 of the BART tutorial: the algorithm itself.
 - By the end we will have walked every moving part of the sampler — no library, pure NumPy.
-- Notebooks 02–04 then drive pymc-bart on real problems.
+- Notebooks then drive pymc-bart on real problems.
 -->
 
 ---
@@ -219,43 +219,6 @@ for t in range(n_draws):
 <!--
 - One accept/reject per iteration; the chain's histogram recovers the target.
 - This is the engine; BART runs it over tree structures instead of a scalar x.
--->
-
----
-layout: top-title-two-cols
-color: sky-light
-columns: is-6
-align: l-lt-lt
----
-
-::title::
-
-# Partial residuals
-
-::left::
-
-## Hold the other trees fixed
-
-$$\Large
-\hat f_{-j}(X) = \sum_{k \ne j} f_k(X)
-$$
-
-Current prediction from every tree except $j$.
-
-::right::
-
-## Update tree $j$ on the leftover
-
-$$\Large
-r_j = y - \hat f_{-j}(X)
-$$
-
-This temporary target is what tree $j$ sees.
-
-<!--
-- This is the bookkeeping step that makes a sum of many trees practical.
-- Tree j does not try to fit y from scratch; it tries to fit the piece the other trees are not currently explaining.
-- One MH update per tree; one full sweep through the ensemble = one MCMC step.
 -->
 
 
