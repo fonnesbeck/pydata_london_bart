@@ -183,7 +183,16 @@ def _(RANDOM_SEED, f1_df, np, subsample):
     y_test = _y[test_idx]
 
     f"train: {X_train.shape[0]} laps ({subsample.value:.0%} of {_n_train}) | test: {X_test.shape[0]} laps | venues: {len(_venues)}"
-    return X_test, X_train, n_num_f1, test_idx, train_idx, y_test, y_train
+    return (
+        X_test,
+        X_train,
+        f1_feature_names,
+        n_num_f1,
+        test_idx,
+        train_idx,
+        y_test,
+        y_train,
+    )
 
 
 @app.cell(hide_code=True)
@@ -207,15 +216,20 @@ def _(mo):
 
 
 @app.cell
-def _(RANDOM_SEED, X_train, n_num_f1, pm, pmb, y_train):
+def _(RANDOM_SEED, X_train, f1_feature_names, n_num_f1, pm, pmb, y_train):
     f1_split_rules = (
         [pmb.ContinuousSplitRule] * n_num_f1
         + [pmb.OneHotSplitRule]
         + [pmb.SubsetSplitRule]
     )
 
-    with pm.Model() as model_f1:
-        X_data_f1 = pm.Data("X_data", X_train)
+    with pm.Model(
+        coords={
+            "f1_observation": range(X_train.shape[0]),
+            "f1_variable": f1_feature_names,
+        }
+    ) as model_f1:
+        X_data_f1 = pm.Data("X_data", X_train, dims=("f1_observation", "f1_variable"))
         mu_f1 = pmb.BART(
             "mu", X=X_data_f1, Y=y_train, m=100, split_rules=f1_split_rules
         )
@@ -299,7 +313,9 @@ def _(az, idata_f1):
 @app.cell
 def _(RANDOM_SEED, X_train, idata_f1, model_f1, pm):
     with model_f1:
-        pm.set_data({"X_data": X_train})
+        pm.set_data(
+            {"X_data": X_train}, coords={"f1_observation": range(X_train.shape[0])}
+        )
         ppc_f1 = pm.sample_posterior_predictive(
             idata_f1,
             var_names=["y"],
@@ -395,7 +411,9 @@ def _(mo):
 @app.cell
 def _(RANDOM_SEED, X_test, idata_f1, model_f1, pm):
     with model_f1:
-        pm.set_data({"X_data": X_test})
+        pm.set_data(
+            {"X_data": X_test}, coords={"f1_observation": range(X_test.shape[0])}
+        )
         pp_f1 = pm.sample_posterior_predictive(
             idata_f1,
             var_names=["mu"],
@@ -445,7 +463,7 @@ def _(mo):
     integrate the other features out over their empirical distribution. See
     `slides/how_bart_works.py`'s "Partial dependence and ICE" section for the
     from-scratch derivation; here it's a one-liner against the fitted BART RV.
-    Survival later adds ICE curves, the individualized analogue of PDP.
+    The ICE helper in the slide notebook is the individualized analogue of PDP.
     """)
     return
 
@@ -453,13 +471,20 @@ def _(mo):
 @app.cell
 def _(X_train, model_f1, pm):
     with model_f1:
-        pm.set_data({"X_data": X_train})
+        pm.set_data(
+            {"X_data": X_train}, coords={"f1_observation": range(X_train.shape[0])}
+        )
     return
 
 
 @app.cell
-def _(X_train, mu_f1, plt, pmb, y_train):
-    _fig = pmb.plot_pdp(bartrv=mu_f1, X=X_train, Y=y_train, figsize=(5,12))
+def _(X_train, f1_feature_names, mu_f1, pl, plt, pmb, y_train):
+    _fig = pmb.plot_pdp(
+        bartrv=mu_f1,
+        X=pl.DataFrame(X_train, schema=f1_feature_names),
+        Y=y_train,
+        figsize=(5, 12),
+    )
     plt.tight_layout()
     _fig
     return
@@ -531,6 +556,7 @@ def _(f1_df, np, pl, test_idx, train_idx):
         "wind_speed",
     ]
     cat_cols_full = ["driver", "team", "compound", "venue"]
+    f1_full_feature_names = num_cols_full + cat_cols_full
     n_numeric_full = len(num_cols_full)
 
     _X_num = f1_df.select(num_cols_full).to_numpy().astype(float)
@@ -547,18 +573,42 @@ def _(f1_df, np, pl, test_idx, train_idx):
     y_train_full = _y_full[train_idx]
     X_test_full = _X_full[test_idx]
     y_test_full = _y_full[test_idx]
-    return X_test_full, X_train_full, n_numeric_full, y_test_full, y_train_full
+    return (
+        X_test_full,
+        X_train_full,
+        f1_full_feature_names,
+        n_numeric_full,
+        y_test_full,
+        y_train_full,
+    )
 
 
 @app.cell
-def _(RANDOM_SEED, X_train_full, n_numeric_full, pm, pmb, y_train_full):
+def _(
+    RANDOM_SEED,
+    X_train_full,
+    f1_full_feature_names,
+    n_numeric_full,
+    pm,
+    pmb,
+    y_train_full,
+):
     _rules_t = (
         [pmb.ContinuousSplitRule] * n_numeric_full
         + [pmb.OneHotSplitRule] * 3
         + [pmb.SubsetSplitRule]
     )
-    with pm.Model() as model_f1_t:
-        _Xd = pm.Data("X_data", X_train_full)
+    with pm.Model(
+        coords={
+            "f1_full_observation": range(X_train_full.shape[0]),
+            "f1_full_variable": f1_full_feature_names,
+        }
+    ) as model_f1_t:
+        _Xd = pm.Data(
+            "X_data",
+            X_train_full,
+            dims=("f1_full_observation", "f1_full_variable"),
+        )
         _mu = pmb.BART(
             "mu",
             X=_Xd,
@@ -624,7 +674,10 @@ def _(mo):
 @app.cell
 def _(RANDOM_SEED, X_test_full, idata_f1_t, model_f1_t, pm):
     with model_f1_t:
-        pm.set_data({"X_data": X_test_full})
+        pm.set_data(
+            {"X_data": X_test_full},
+            coords={"f1_full_observation": range(X_test_full.shape[0])},
+        )
         pp_f1_t = pm.sample_posterior_predictive(
             idata_f1_t,
             var_names=["mu"],
@@ -738,10 +791,17 @@ def _(mo):
 
 
 @app.cell
-def _(RANDOM_SEED, X_train, f1_split_rules, pm, pmb, y_train):
+def _(RANDOM_SEED, X_train, f1_feature_names, f1_split_rules, pm, pmb, y_train):
     def fit_f1_m(m):
-        with pm.Model():
-            X_data_m = pm.Data("X_data", X_train)
+        with pm.Model(
+            coords={
+                "f1_observation": range(X_train.shape[0]),
+                "f1_variable": f1_feature_names,
+            }
+        ):
+            X_data_m = pm.Data(
+                "X_data", X_train, dims=("f1_observation", "f1_variable")
+            )
             mu_m = pmb.BART(
                 "mu", X=X_data_m, Y=y_train, m=m, split_rules=f1_split_rules
             )

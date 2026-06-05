@@ -1,5 +1,0 @@
-node_modules/
-dist/
-*.local
-.remote-assets/
-components.d.ts

@@ -4,3 +4,6 @@
 
 # pre-computed inference artifacts (derived from scripts/precompute_*.py)
 data/idata/
+
+# slide deck kept out of version control
+slides/

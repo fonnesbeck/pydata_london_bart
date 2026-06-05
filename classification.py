@@ -244,7 +244,7 @@ def _(RANDOM_SEED, gss_df, np, pmb, subsample):
     train_idx = _perm[:_n_sub]
     X_train, X_test = X[train_idx], X[test_idx]
     y_bin_train, y_bin_test = y_bin[train_idx], y_bin[test_idx]
-    y_ord_train, y_ord_test = y_ord[train_idx], y_ord[test_idx]
+    y_ord_train = y_ord[train_idx]
 
     (
         f"n={X.shape[0]} (train {len(train_idx)} [{subsample.value:.0%} of {_n_train}] / test {len(test_idx)}), p={X.shape[1]} | "
@@ -314,6 +314,7 @@ def _(RANDOM_SEED, X_train, pm, pmb, split_rules, y_bin_train):
         p = pm.Deterministic("p", pm.math.invprobit(eta))
         pm.Bernoulli("y", p=p, observed=y_bin_train, shape=p.shape)
         idata_cls = pm.sample(random_seed=RANDOM_SEED)
+        pm.compute_log_likelihood(idata_cls)
     return eta, idata_cls, model_cls
 
 
@@ -546,21 +547,97 @@ def _(mo):
     mo.md(r"""
     ### Which predictors matter?
 
-    `compute_variable_importance` ranks features by inclusion frequency (how
-    often each appears as a splitting variable across the posterior trees)
-    and measures how well each prefix of the ranking reproduces the full BART
-    fit. The curve plateaus when the selected predictors are enough for the
-    restricted model to behave like the full ensemble.
+    `compute_variable_importance` first ranks features by **posterior inclusion
+    frequency**: how often each feature appears as a splitting variable across the
+    sampled trees. The plot then follows that ranking cumulatively: the first row is
+    the top-inclusion feature alone, the next row adds the second feature, and so on.
+
+    So the order matters for reading the path, but it is **not** a causal ranking and
+    not the same as a single-feature effect size. In this fit, `race` enters first
+    because it was the most frequently used splitting variable in the posterior. On
+    its own it recovers very little of the full fit ($R^2 \approx 0.02$ here), so the
+    substantive signal is in the later jumps from `finrela` and the wellbeing scales,
+    not in `race` alone.
     """)
     return
 
 
-@app.cell
-def _(X_train, eta, feature_names, idata_cls, model_cls, pm, pmb):
+@app.cell(hide_code=True)
+def _(X_train, eta, feature_names, idata_cls, model_cls, np, plt, pm, pmb):
     with model_cls:
         pm.set_data({"X_data": X_train})
         _vi_cls = pmb.compute_variable_importance(idata_cls, eta, X_train)
-    pmb.plot_variable_importance(_vi_cls, labels=feature_names)
+
+    _ordered_features = np.asarray(feature_names)[_vi_cls["indices"]]
+    _cumulative_labels = [
+        name if i == 0 else f"+ {name}" for i, name in enumerate(_ordered_features)
+    ]
+    _y = np.arange(len(_cumulative_labels))
+    _r2_mean = _vi_cls["r2_mean"]
+    _r2_hdi = _vi_cls["r2_hdi"]
+    _xerr = np.vstack(
+        [
+            np.clip(_r2_mean - _r2_hdi[:, 0], 0, None),
+            np.clip(_r2_hdi[:, 1] - _r2_mean, 0, None),
+        ]
+    )
+
+
+    def _pearson_r2(a, b):
+        return float(np.corrcoef(a, b)[0, 1] ** 2)
+
+
+    _preds_all = _vi_cls["preds_all"]
+    _ref_r2 = np.array(
+        [_pearson_r2(_preds_all[i], _preds_all[i + 1]) for i in range(len(_preds_all) - 1)]
+    )
+    _ref_lo, _ref_hi = np.quantile(_ref_r2, [0.05, 0.95])
+    _ref_mean = _ref_r2.mean()
+
+    _fig, _ax = plt.subplots(figsize=(8.5, 6.0))
+    _ax.axvspan(_ref_lo, _ref_hi, color="0.5", alpha=0.12, lw=0)
+    _ax.axvline(_ref_mean, color="0.45", ls="--", lw=1.5, label="full-model agreement")
+    _ax.errorbar(
+        _r2_mean,
+        _y,
+        xerr=_xerr,
+        fmt="o",
+        ms=6,
+        color="#2f2f2f",
+        mfc="white",
+        mec="#2f2f2f",
+        ecolor="#2f2f2f",
+        elinewidth=1.4,
+        capsize=3,
+    )
+    _ax.set_yticks(_y, _cumulative_labels)
+    _ax.invert_yaxis()
+    _ax.set_xlim(0, 1)
+    _ax.set_xlabel(r"Agreement with full BART fit ($R^2$)")
+    _ax.set_ylabel("Cumulative predictors (inclusion-frequency order)")
+    _ax.set_title("Restricted submodels recover the full BART fit", pad=12)
+    _ax.grid(axis="x", alpha=0.18)
+    _ax.spines[["top", "right"]].set_visible(False)
+    _ax.legend(frameon=False, loc="lower right")
+    _fig.tight_layout()
+    _fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    The first row is a useful warning about variable-importance plots. `race` appears
+    first because it is the most frequently selected splitting variable, not because
+    it explains much by itself. Its restricted fit has almost no agreement with the
+    full BART surface, so the model is using it as an early partition rather than as
+    the main source of predictive signal.
+
+    The larger jumps come after `finrela` and the wellbeing measures enter the
+    cumulative submodel. Read the plot as: **which additions make the restricted
+    ensemble behave like the full ensemble?** On that scale, the financial and
+    self-reported wellbeing variables carry the interpretable signal.
+    """)
     return
 
 
@@ -658,7 +735,7 @@ def _(mo):
 def _(RANDOM_SEED, X_train, np, pm, pmb, split_rules, y_bin_train):
     _split_prior = np.ones(12)
     _split_prior[3:8] = 10.0
-    with pm.Model() as model_cls_sp:
+    with pm.Model():
         X_data_sp = pm.Data("X_data", X_train)
         eta_sp = pmb.BART(
             "eta",
@@ -671,7 +748,32 @@ def _(RANDOM_SEED, X_train, np, pm, pmb, split_rules, y_bin_train):
         p_sp = pm.Deterministic("p", pm.math.invprobit(eta_sp))
         pm.Bernoulli("y", p=p_sp, observed=y_bin_train, shape=p_sp.shape)
         idata_cls_sp = pm.sample(random_seed=RANDOM_SEED)
+        pm.compute_log_likelihood(idata_cls_sp)
     return (idata_cls_sp,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    The uniform and domain-prior BART fits share the same binary outcome,
+    likelihood, training rows, and tree count, so PSIS-LOO isolates the effect
+    of the split prior. Higher `elpd_loo` is better; differences smaller than a
+    few standard errors are not practically meaningful.
+    """)
+    return
+
+
+@app.cell
+def _(az, idata_cls, idata_cls_sp):
+    cls_loo_comparison = az.compare(
+        {
+            "uniform split prior": idata_cls,
+            "wellbeing split prior": idata_cls_sp,
+        },
+        ic="loo",
+    )
+    cls_loo_comparison
+    return
 
 
 @app.cell

@@ -16,6 +16,9 @@ fastf1 = ">=3.8.3"
 pymc = ">=6.0.0"
 arviz = ">=1.1.0"
 scikit-learn = ">=1.5"
+plotly = ">=6.8.0,<7"
+pydantic-ai = ">=1.106.0,<2"
+mcp = ">=1.27.2,<2"
 
 [pypi-dependencies]
 pymc-bart = ">=0.12.0"
