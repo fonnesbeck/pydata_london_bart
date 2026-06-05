@@ -75,12 +75,6 @@ Notice that the `marimo` command is nested within a `pixi run` command; this ens
 
 If everything installs and a notebook opens without errors, you're ready for the tutorial. If you run into problems with setup, please [open an issue](https://github.com/fonnesbeck/pydata_london_bart/issues) on this repository.
 
-## Notebook writing conventions
-
-- Put explanation in markdown cells; keep code comments local to implementation details.
-- Use plain teaching transitions instead of workflow labels.
-- Keep each notebook moving through the same arc: introduce the problem, fit, check, interpret, extend.
-
 ## Description
 
 Machine learning models are often evaluated on predictive accuracy alone, but accuracy without uncertainty can be misleading. Classical tree ensemble methods like random forests and gradient boosting provide point predictions, and while techniques like conformal inference or bootstrap aggregation can add uncertainty estimates, these are often poorly calibrated or computationally expensive.
