@@ -1,13 +1,13 @@
 import marimo
 
-__generated_with = "0.23.5"
+__generated_with = "0.23.9"
 app = marimo.App(width="medium")
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # BART for regression
+    # BART for regression: F1 lap times
 
     We use `pymc-bart`, the production library that wraps the BART
     algorithm with PyMC's sampler and posterior tooling, and apply it
@@ -802,7 +802,15 @@ def _(mo):
 
 
 @app.cell
-def _(RANDOM_SEED, X_train, f1_feature_names, f1_split_rules, pm, pmb, y_train):
+def _(
+    RANDOM_SEED,
+    X_train,
+    f1_feature_names,
+    f1_split_rules,
+    pm,
+    pmb,
+    y_train,
+):
     def fit_f1_m(m):
         with pm.Model(
             coords={
